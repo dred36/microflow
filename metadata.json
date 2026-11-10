@@ -1,0 +1,6 @@
+{
+  "name": "EtchFlow - Microfabrication Process Flow & Cross-Section CAD",
+  "description": "Interactive semiconductor and MEMS microfabrication process flow designer. Simulate layer deposition, photolithography, isotropic/anisotropic etching, lift-off, and CMP with publication-ready cross-sections.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
