@@ -36,7 +36,7 @@ export default function App() {
                 id: 'sub_default',
                 name: 'Silicon <100> Substrate',
                 materialId: parsed.substrateMaterialId || 'mat_si_sub',
-                thickness: parsed.substrateThickness || 3000,
+                thickness: parsed.substrateThickness || 725,
               },
             ];
           }
@@ -154,7 +154,7 @@ export default function App() {
           id: 'sub_default',
           name: 'Silicon <100> Substrate',
           materialId: newFlow.substrateMaterialId || 'mat_si_sub',
-          thickness: newFlow.substrateThickness || 3000,
+          thickness: newFlow.substrateThickness || 725,
         },
       ];
     }
