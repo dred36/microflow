@@ -68,6 +68,7 @@ export interface LithographyConfig {
   exposureMethod: 'UV Contact (365nm)' | 'DUV Stepper (248nm)' | 'E-Beam Litho' | 'Direct Write Laser';
   maskName?: string;
   maskId?: string; // Linked PhotomaskLevel id
+  maskColor?: string; // Reticle accent color
 }
 
 export interface PhotomaskLevel {

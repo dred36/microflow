@@ -585,10 +585,11 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                         return (
                           <div
                             key={w.id || `mini_${wIdx}`}
-                            className="absolute top-0 bottom-0 bg-amber-400"
+                            className="absolute top-0 bottom-0"
                             style={{
                               left: `${leftPct}%`,
                               width: `${Math.max(1, widthPct)}%`,
+                              backgroundColor: mask.color || '#38bdf8',
                             }}
                           />
                         );
@@ -918,17 +919,23 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                     const isActive = activeWindowId === win.id;
                     const widthNm = Math.round(win.xEnd - win.xStart);
 
+                    const accentColor = selectedMask.color || '#38bdf8';
+
                     return (
                       <div
                         key={win.id || `win_${idx}`}
-                        className={`absolute top-1 bottom-1 rounded-lg flex items-center justify-center transition-shadow ${
+                        className={`absolute top-1 bottom-1 rounded-lg flex items-center justify-center transition-all ${
                           isActive
-                            ? 'bg-amber-400/95 text-slate-950 shadow-lg shadow-amber-500/30 ring-2 ring-white z-20'
-                            : 'bg-amber-500/85 hover:bg-amber-400 text-slate-950 shadow-md z-10'
+                            ? 'ring-2 ring-white shadow-xl z-20 brightness-110'
+                            : 'hover:brightness-110 shadow-md z-10'
                         }`}
                         style={{
                           left: `${leftPct}%`,
                           width: `${Math.max(1, widthPct)}%`,
+                          backgroundColor: accentColor,
+                          boxShadow: isActive
+                            ? `0 0 0 2px #ffffff, 0 8px 18px -2px ${accentColor}90`
+                            : `0 3px 10px -2px ${accentColor}60`,
                           cursor: 'grab',
                         }}
                         onPointerDown={(e) => handlePointerDown(e, win, 'move')}
@@ -939,11 +946,11 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                           onPointerDown={(e) => handlePointerDown(e, win, 'resize-start')}
                           title="Drag to resize left edge"
                         >
-                          <div className="w-1 h-4 bg-slate-900/40 rounded-full group-hover:bg-slate-950" />
+                          <div className="w-1 h-4 bg-slate-900/50 rounded-full group-hover:bg-slate-950" />
                         </div>
 
                         {/* Aperture label (width) */}
-                        <span className="font-mono text-[10px] font-bold px-1 select-none pointer-events-none truncate">
+                        <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-black/50 text-white backdrop-blur-xs select-none pointer-events-none truncate shadow-sm">
                           {widthNm >= 1000 ? `${(widthNm / 1000).toFixed(2)} µm` : `${widthNm} nm`}
                         </span>
 
@@ -953,7 +960,7 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                           onPointerDown={(e) => handlePointerDown(e, win, 'resize-end')}
                           title="Drag to resize right edge"
                         >
-                          <div className="w-1 h-4 bg-slate-900/40 rounded-full group-hover:bg-slate-950" />
+                          <div className="w-1 h-4 bg-slate-900/50 rounded-full group-hover:bg-slate-950" />
                         </div>
                       </div>
                     );
@@ -1010,7 +1017,10 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                             }`}
                           >
                             <td className="px-3.5 py-2 font-mono text-slate-300">
-                              <span className="inline-block w-2 h-2 rounded-full bg-amber-400 mr-2" />
+                              <span
+                                className="inline-block w-2 h-2 rounded-full mr-2"
+                                style={{ backgroundColor: selectedMask.color || '#38bdf8' }}
+                              />
                               W-{idx + 1}
                             </td>
 

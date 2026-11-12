@@ -125,6 +125,7 @@ export function updateMaskAndSyncSteps(
             polarity: updatedMask.polarity,
             maskName: updatedMask.name,
             maskId: updatedMask.id,
+            maskColor: updatedMask.color,
           },
         };
       }
@@ -194,6 +195,7 @@ export function assignMaskToStep(
           maskId: mask.id,
           maskName: mask.name,
           polarity: mask.polarity,
+          maskColor: mask.color,
           windows: mask.windows.map((w) => ({ ...w })),
         },
       };
@@ -256,6 +258,7 @@ export function swapMaskAssignments(
           maskId: maskA.id,
           maskName: maskA.name,
           polarity: maskA.polarity,
+          maskColor: maskA.color,
           windows: maskA.windows.map((w) => ({ ...w })),
         },
       };
@@ -278,6 +281,7 @@ export function swapMaskAssignments(
           maskId: maskB.id,
           maskName: maskB.name,
           polarity: maskB.polarity,
+          maskColor: maskB.color,
           windows: maskB.windows.map((w) => ({ ...w })),
         },
       };
