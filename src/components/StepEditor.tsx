@@ -10,6 +10,8 @@ import {
   ProcessStepType,
   ToolRecipe,
   MaskWindow,
+  ProcessBlock,
+  PhotomaskLevel,
 } from '../types/microfab';
 import {
   Layers,
@@ -27,6 +29,7 @@ import {
   Wind,
   Plus,
   Trash2,
+  Scan,
 } from 'lucide-react';
 
 interface StepEditorProps {
@@ -35,6 +38,10 @@ interface StepEditorProps {
   materials: Material[];
   onUpdateStep: (updated: ProcessStep) => void;
   onOpenMaterialsModal: () => void;
+  blocks?: ProcessBlock[];
+  masks?: PhotomaskLevel[];
+  onOpenMaskLevelsModal?: (maskId?: string) => void;
+  onCreateBlock?: (name?: string) => void;
 }
 
 export const StepEditor: React.FC<StepEditorProps> = ({
@@ -43,8 +50,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
   materials,
   onUpdateStep,
   onOpenMaterialsModal,
+  blocks,
+  masks,
+  onOpenMaskLevelsModal,
+  onCreateBlock,
 }) => {
   const [activeTab, setActiveTab] = useState<'process' | 'equipment' | 'notes'>('process');
+  const [isAddingBlockInline, setIsAddingBlockInline] = useState<boolean>(false);
+  const [inlineBlockName, setInlineBlockName] = useState<string>('');
 
   const handleUpdate = (patch: Partial<ProcessStep>) => {
     onUpdateStep({ ...step, ...patch });
@@ -100,6 +113,86 @@ export const StepEditor: React.FC<StepEditorProps> = ({
           placeholder="Step title..."
           className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-white font-medium text-sm focus:outline-none focus:border-sky-500 transition-colors"
         />
+
+        {/* Fabrication Block / Module Assignment */}
+        <div className="mt-2.5 flex items-center gap-2">
+          <span className="text-[11px] text-slate-400 shrink-0 font-medium">Module:</span>
+          <select
+            value={step.blockId || 'none'}
+            onChange={(e) =>
+              handleUpdate({ blockId: e.target.value === 'none' ? undefined : e.target.value })
+            }
+            className="flex-1 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono truncate"
+          >
+            <option value="none">-- Ungrouped Operation --</option>
+            {blocks?.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+          {onCreateBlock && (
+            <button
+              type="button"
+              onClick={() => {
+                setInlineBlockName(`Module ${(blocks?.length || 0) + 1}: `);
+                setIsAddingBlockInline(!isAddingBlockInline);
+              }}
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 border border-slate-700 text-xs transition-colors shrink-0"
+              title="Create new fabrication block / module"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Inline Module Creation Row */}
+        {isAddingBlockInline && (
+          <div className="flex items-center gap-1.5 mt-2 p-1.5 rounded-lg bg-slate-950 border border-sky-500/60 animate-in fade-in zoom-in-95 duration-100">
+            <input
+              type="text"
+              autoFocus
+              value={inlineBlockName}
+              onChange={(e) => setInlineBlockName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && inlineBlockName.trim() && onCreateBlock) {
+                  onCreateBlock(inlineBlockName.trim());
+                  setIsAddingBlockInline(false);
+                  setInlineBlockName('');
+                }
+                if (e.key === 'Escape') {
+                  setIsAddingBlockInline(false);
+                  setInlineBlockName('');
+                }
+              }}
+              placeholder="e.g. Module 3: Interconnect"
+              className="flex-1 px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-500 font-medium"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                if (inlineBlockName.trim() && onCreateBlock) {
+                  onCreateBlock(inlineBlockName.trim());
+                  setIsAddingBlockInline(false);
+                  setInlineBlockName('');
+                }
+              }}
+              className="px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-semibold transition-colors"
+            >
+              Create
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsAddingBlockInline(false);
+                setInlineBlockName('');
+              }}
+              className="p-1 rounded text-slate-400 hover:text-white text-xs"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Navigation Tabs */}
         <div className="flex items-center gap-1 mt-3 p-1 rounded-lg bg-slate-950 border border-slate-800 text-xs">
@@ -309,6 +402,76 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   <span className="text-[10px] text-slate-500 font-mono">
                     Mask apertures edited on canvas track
                   </span>
+                </div>
+
+                {/* Mask Level Linking / Reticle Assignment */}
+                <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-sky-400 flex items-center gap-1.5">
+                      <Scan className="w-3.5 h-3.5" />
+                      <span>Photomask Level / Reticle</span>
+                    </span>
+                    {onOpenMaskLevelsModal && (
+                      <button
+                        onClick={() => onOpenMaskLevelsModal(step.lithography?.maskId)}
+                        className="text-[11px] text-sky-400 hover:text-sky-300 hover:underline flex items-center gap-1 font-medium"
+                      >
+                        <span>Manage Reticles →</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={step.lithography?.maskId || 'none'}
+                      onChange={(e) => {
+                        const maskId = e.target.value === 'none' ? undefined : e.target.value;
+                        const matchingMask = masks?.find((m) => m.id === maskId);
+                        if (matchingMask) {
+                          handleUpdate({
+                            lithography: {
+                              ...(step.lithography || {
+                                resistMaterialId: 'mat_pr_pos',
+                                resistThickness: 1000,
+                                polarity: 'positive',
+                                windows: [],
+                                sidewallAngle: 90,
+                                exposureMethod: 'UV Contact (365nm)',
+                              }),
+                              maskId: matchingMask.id,
+                              maskName: matchingMask.name,
+                              polarity: matchingMask.polarity,
+                              windows: matchingMask.windows.map((w) => ({ ...w })),
+                            },
+                          });
+                        } else {
+                          handleUpdate({
+                            lithography: {
+                              ...step.lithography!,
+                              maskId: undefined,
+                            },
+                          });
+                        }
+                      }}
+                      className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="none">-- Unlinked Custom Apertures --</option>
+                      {masks?.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.windows?.length || 0} slits · {m.polarity})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {step.lithography?.windows && (
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono pt-0.5">
+                      <span>{step.lithography.windows.length} Aperture {step.lithography.windows.length === 1 ? 'window' : 'windows'}</span>
+                      <span className="text-amber-400">
+                        {step.lithography.polarity === 'positive' ? 'Positive (Exposed Dissolves)' : 'Negative (Exposed Crosslinks)'}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

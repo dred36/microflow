@@ -67,6 +67,19 @@ export interface LithographyConfig {
   sidewallAngle: number; // degrees (e.g. 90 = vertical, >90 = retrograde/undercut for liftoff, <90 = tapered)
   exposureMethod: 'UV Contact (365nm)' | 'DUV Stepper (248nm)' | 'E-Beam Litho' | 'Direct Write Laser';
   maskName?: string;
+  maskId?: string; // Linked PhotomaskLevel id
+}
+
+export interface PhotomaskLevel {
+  id: string;
+  levelNumber?: number; // 1, 2, 3...
+  name: string; // e.g. "MASK 01: GATE"
+  layerCode?: string; // e.g. "GATE-01", "VIA-01", "MET-01"
+  description?: string; // e.g. "Defines gate line features"
+  polarity: 'positive' | 'negative';
+  color?: string; // Reticle accent color for UI tracking
+  windows: MaskWindow[];
+  assignedStepId?: string; // ID of assigned photolithography step
 }
 
 export interface EtchConfig {
@@ -104,6 +117,14 @@ export interface ToolRecipe {
   inspectionNotes?: string;
 }
 
+export interface ProcessBlock {
+  id: string;
+  name: string; // e.g. "Module 1: Gate Dielectric & Poly Stack"
+  description?: string;
+  color?: string; // hex color for block visual distinction
+  collapsed?: boolean;
+}
+
 export interface ProcessStep {
   id: string;
   title: string;
@@ -112,6 +133,7 @@ export interface ProcessStep {
   notes?: string;
   materialId?: string;
   thickness?: number; // in nm
+  blockId?: string; // ID of the fabrication block this step belongs to
   
   // Specific configurations
   deposition?: DepositionConfig;
@@ -139,6 +161,8 @@ export interface ProcessFlow {
   substrateLayers: SubstrateLayer[]; // multi-layer starting substrate
   steps: ProcessStep[];
   materials: Material[];
+  masks?: PhotomaskLevel[]; // Central mask set library
+  blocks?: ProcessBlock[]; // Fabrication blocks / modules hierarchy
 }
 
 /**

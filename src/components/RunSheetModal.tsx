@@ -177,8 +177,23 @@ export const RunSheetModal: React.FC<RunSheetModalProps> = ({ flow, onClose }) =
                       </td>
                       <td className="py-3 px-3">
                         <div className="font-semibold text-slate-100">{step.title}</div>
-                        <div className="text-[10px] text-slate-400 uppercase tracking-wide">
-                          {step.type}
+                        <div className="text-[10px] text-slate-400 uppercase tracking-wide flex items-center gap-1.5 flex-wrap">
+                          <span>{step.type}</span>
+                          {step.blockId && (() => {
+                            const blk = flow.blocks?.find((b) => b.id === step.blockId);
+                            return blk ? (
+                              <>
+                                <span>·</span>
+                                <span className="text-sky-400/90 font-medium">{blk.name}</span>
+                              </>
+                            ) : null;
+                          })()}
+                          {step.type === 'lithography' && step.lithography?.maskName && (
+                            <>
+                              <span>·</span>
+                              <span className="text-amber-400/90 font-medium">Reticle: {step.lithography.maskName}</span>
+                            </>
+                          )}
                         </div>
                       </td>
                       <td className="py-3 px-3 font-mono text-slate-300">

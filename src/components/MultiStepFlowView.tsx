@@ -58,6 +58,9 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
       mesh: CrossSectionMesh;
       polygons: RenderedPolygon[];
       customSubtitle?: string;
+      blockName?: string;
+      blockColor?: string;
+      reticleName?: string;
     }[] = [];
 
     const subLayers = flow.substrateLayers || [
@@ -91,7 +94,21 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
     enabledSteps.forEach((step, idx) => {
       const mesh = simulateCrossSection(flow, idx);
       const polygons = buildRenderPolygons(mesh, flow.materials);
-      list.push({ step, idx, mesh, polygons });
+      const block = flow.blocks?.find((b) => b.id === step.blockId);
+      const maskId = step.lithography?.maskId;
+      const mask = maskId
+        ? flow.masks?.find((m) => m.id === maskId)
+        : undefined;
+
+      list.push({
+        step,
+        idx,
+        mesh,
+        polygons,
+        blockName: block?.name,
+        blockColor: block?.color,
+        reticleName: mask ? `${mask.layerCode} ${mask.name}` : undefined,
+      });
     });
 
     return list;
@@ -354,11 +371,12 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
                     x={padX}
                     y={22}
                     fill={theme === 'paper' ? '#0f172a' : '#f8fafc'}
-                    fontSize="12"
+                    fontSize="11.5"
                     fontWeight="700"
                     fontFamily="Plus Jakarta Sans, sans-serif"
                   >
                     {getStepLetter(idx)} {step.title}
+                    {item.blockName && ` [${item.blockName}]`}
                   </text>
 
                   {/* Subtitle / Recipe detail */}
@@ -376,7 +394,9 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
                             step.deposition?.thickness || step.thickness || 200
                           } nm`) ||
                         (step.type === 'lithography' &&
-                          `Photolithography · ${step.lithography?.polarity} tone`) ||
+                          `Photolithography · ${step.lithography?.polarity} tone${
+                            item.reticleName ? ` · Reticle: ${item.reticleName}` : ''
+                          }`) ||
                         (step.type === 'etch' &&
                           `Etch: ${step.etch?.etchType?.toUpperCase()} · depth ${
                             step.etch?.depth || step.thickness || 200

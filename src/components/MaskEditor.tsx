@@ -5,12 +5,13 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { MaskWindow, ProcessStep } from '../types/microfab';
-import { Plus, Trash2, ArrowLeftRight, MoveHorizontal, GripVertical } from 'lucide-react';
+import { Plus, Trash2, ArrowLeftRight, MoveHorizontal, GripVertical, Scan } from 'lucide-react';
 
 interface MaskEditorProps {
   step: ProcessStep;
   waferWidth: number; // in nm
   onUpdateStep: (updated: ProcessStep) => void;
+  onOpenMaskLevels?: () => void;
 }
 
 interface DragState {
@@ -25,6 +26,7 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
   step,
   waferWidth,
   onUpdateStep,
+  onOpenMaskLevels,
 }) => {
   const litho = step.lithography;
   if (!litho) return null;
@@ -225,6 +227,17 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
             <Plus className="w-3.5 h-3.5" />
             <span>Add Aperture</span>
           </button>
+
+          {onOpenMaskLevels && (
+            <button
+              onClick={onOpenMaskLevels}
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 border border-slate-700 transition-colors"
+              title="Open Photolithography Mask Levels Panel"
+            >
+              <Scan className="w-3.5 h-3.5" />
+              <span>Mask Levels</span>
+            </button>
+          )}
         </div>
       </div>
 

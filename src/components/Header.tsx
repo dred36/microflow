@@ -22,6 +22,7 @@ import {
   Sliders,
   PanelLeft,
   PanelRight,
+  Scan,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -33,6 +34,7 @@ interface HeaderProps {
   onUpdateTitle: (title: string) => void;
   onOpenPresets: () => void;
   onOpenMaterials: () => void;
+  onOpenMaskLevels: () => void;
   onOpenRunSheet: () => void;
   onOpenMultiStepView: () => void;
   onExportJson: () => void;
@@ -52,6 +54,7 @@ export const Header: React.FC<HeaderProps> = ({
   onUpdateTitle,
   onOpenPresets,
   onOpenMaterials,
+  onOpenMaskLevels,
   onOpenRunSheet,
   onOpenMultiStepView,
   onExportJson,
@@ -85,10 +88,10 @@ export const Header: React.FC<HeaderProps> = ({
         if (parsed.steps && parsed.substrateWidth) {
           onImportJson(parsed);
         } else {
-          alert('Invalid process flow JSON schema.');
+          console.error('Invalid process flow JSON schema.');
         }
       } catch (err) {
-        alert('Failed to parse JSON file.');
+        console.error('Failed to parse JSON file.', err);
       }
     };
     reader.readAsText(file);
@@ -119,7 +122,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div>
             <div className="flex items-center gap-1.5">
               <span className="font-extrabold text-sm text-white tracking-wide">
-                EtchFlow
+                MicroFlow
               </span>
               <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20">
                 CAD
@@ -227,6 +230,15 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <Sliders className="w-3.5 h-3.5 text-emerald-400" />
           <span>Materials</span>
+        </button>
+
+        <button
+          onClick={onOpenMaskLevels}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium transition-colors"
+          title="Photolithography Mask Levels & Apertures"
+        >
+          <Scan className="w-3.5 h-3.5 text-sky-400" />
+          <span>Mask Levels</span>
         </button>
 
         <button

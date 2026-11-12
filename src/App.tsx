@@ -16,14 +16,16 @@ import { MultiStepFlowView } from './components/MultiStepFlowView';
 import { MaterialsModal } from './components/MaterialsModal';
 import { RunSheetModal } from './components/RunSheetModal';
 import { PresetPickerModal } from './components/PresetPickerModal';
-
+import { MaskLevelsModal } from './components/MaskLevelsModal';
 import { SubstrateEditor } from './components/SubstrateEditor';
+import { ensureFlowMasks, syncStepWindowsToMask } from './lib/maskUtils';
+import { ensureFlowBlocks, createBlock } from './lib/blockUtils';
 
 export default function App() {
   // Load initial process from localStorage if present, or fallback to CMOS preset
   const [flow, setFlow] = useState<ProcessFlow>(() => {
     try {
-      const saved = localStorage.getItem('etchflow_current_flow');
+      const saved = localStorage.getItem('microflow_current_flow') || localStorage.getItem('etchflow_current_flow');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed?.steps?.length > 0) {
@@ -38,13 +40,13 @@ export default function App() {
               },
             ];
           }
-          return parsed;
+          return ensureFlowBlocks(ensureFlowMasks(parsed));
         }
       }
     } catch (e) {
       // ignore
     }
-    return PRESET_PROCESS_FLOWS[0];
+    return ensureFlowBlocks(ensureFlowMasks(PRESET_PROCESS_FLOWS[0]));
   });
 
   const [activeStepIndex, setActiveStepIndex] = useState<number>(0);
@@ -53,6 +55,8 @@ export default function App() {
   // Modals state
   const [showPresets, setShowPresets] = useState<boolean>(false);
   const [showMaterials, setShowMaterials] = useState<boolean>(false);
+  const [showMaskLevels, setShowMaskLevels] = useState<boolean>(false);
+  const [focusMaskId, setFocusMaskId] = useState<string | undefined>(undefined);
   const [showRunSheet, setShowRunSheet] = useState<boolean>(false);
   const [showMultiStep, setShowMultiStep] = useState<boolean>(false);
 
@@ -63,7 +67,7 @@ export default function App() {
   // Save to localStorage on changes
   useEffect(() => {
     try {
-      localStorage.setItem('etchflow_current_flow', JSON.stringify(flow));
+      localStorage.setItem('microflow_current_flow', JSON.stringify(flow));
     } catch (e) {
       // ignore
     }
@@ -109,7 +113,11 @@ export default function App() {
     const updatedSteps = flow.steps.map((s, idx) =>
       idx === activeStepIndex ? updatedStep : s
     );
-    setFlow({ ...flow, steps: updatedSteps });
+    let updatedFlow = { ...flow, steps: updatedSteps };
+    if (updatedStep.type === 'lithography') {
+      updatedFlow = syncStepWindowsToMask(updatedFlow, updatedStep);
+    }
+    setFlow(updatedFlow);
   };
 
   const handleUpdateTitle = (title: string) => {
@@ -117,7 +125,7 @@ export default function App() {
   };
 
   const handleSelectPreset = (preset: ProcessFlow) => {
-    setFlow(preset);
+    setFlow(ensureFlowBlocks(ensureFlowMasks(preset)));
     setActiveStepIndex(0);
     setIsPlaying(false);
     setShowPresets(false);
@@ -150,7 +158,7 @@ export default function App() {
         },
       ];
     }
-    setFlow(newFlow);
+    setFlow(ensureFlowBlocks(ensureFlowMasks(newFlow)));
     setActiveStepIndex(0);
   };
 
@@ -169,6 +177,10 @@ export default function App() {
         onUpdateTitle={handleUpdateTitle}
         onOpenPresets={() => setShowPresets(true)}
         onOpenMaterials={() => setShowMaterials(true)}
+        onOpenMaskLevels={() => {
+          setFocusMaskId(undefined);
+          setShowMaskLevels(true);
+        }}
         onOpenRunSheet={() => setShowRunSheet(true)}
         onOpenMultiStepView={() => setShowMultiStep(true)}
         onExportJson={handleExportJson}
@@ -206,6 +218,10 @@ export default function App() {
                 step={activeStep}
                 waferWidth={flow.substrateWidth}
                 onUpdateStep={handleUpdateStep}
+                onOpenMaskLevels={() => {
+                  setFocusMaskId(activeStep.lithography?.maskId);
+                  setShowMaskLevels(true);
+                }}
               />
             </div>
           )}
@@ -245,6 +261,19 @@ export default function App() {
                 materials={flow.materials}
                 onUpdateStep={handleUpdateStep}
                 onOpenMaterialsModal={() => setShowMaterials(true)}
+                blocks={flow.blocks}
+                masks={flow.masks}
+                onOpenMaskLevelsModal={(maskId) => {
+                  setFocusMaskId(maskId);
+                  setShowMaskLevels(true);
+                }}
+                onCreateBlock={(name) => {
+                  const { flow: updated, block: newBlock } = createBlock(flow, name);
+                  const updatedSteps = updated.steps.map((s, idx) =>
+                    idx === activeStepIndex ? { ...s, blockId: newBlock.id } : s
+                  );
+                  setFlow({ ...updated, steps: updatedSteps });
+                }}
               />
             ) : null}
           </aside>
@@ -264,6 +293,20 @@ export default function App() {
           materials={flow.materials}
           onUpdateMaterials={handleUpdateMaterials}
           onClose={() => setShowMaterials(false)}
+        />
+      )}
+
+      {showMaskLevels && (
+        <MaskLevelsModal
+          flow={flow}
+          isOpen={showMaskLevels}
+          onClose={() => setShowMaskLevels(false)}
+          onUpdateFlow={setFlow}
+          onSelectStepIndex={(idx) => {
+            setActiveStepIndex(idx);
+            setIsPlaying(false);
+          }}
+          initialMaskId={focusMaskId}
         />
       )}
 
