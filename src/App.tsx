@@ -19,7 +19,8 @@ import { PresetPickerModal } from './components/PresetPickerModal';
 import { MaskLevelsModal } from './components/MaskLevelsModal';
 import { SubstrateEditor } from './components/SubstrateEditor';
 import { ensureFlowMasks, syncStepWindowsToMask } from './lib/maskUtils';
-import { ensureFlowBlocks, createBlock } from './lib/blockUtils';
+import { ensureFlowBlocks, createBlock, assignStepToBlock } from './lib/blockUtils';
+import { ThicknessUnit } from './lib/units';
 
 export default function App() {
   // Load initial process from localStorage if present, or fallback to CMOS preset
@@ -51,6 +52,16 @@ export default function App() {
 
   const [activeStepIndex, setActiveStepIndex] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [playSpeed, setPlaySpeed] = useState<number>(1);
+  const [thicknessUnit, setThicknessUnit] = useState<ThicknessUnit>(() => {
+    try {
+      const saved = localStorage.getItem('microflow_thickness_unit');
+      if (saved === 'um' || saved === 'nm') return saved;
+    } catch {
+      // ignore
+    }
+    return 'nm';
+  });
 
   // Modals state
   const [showPresets, setShowPresets] = useState<boolean>(false);
@@ -73,9 +84,18 @@ export default function App() {
     }
   }, [flow]);
 
-  // Handle Playback animation
+  useEffect(() => {
+    try {
+      localStorage.setItem('microflow_thickness_unit', thicknessUnit);
+    } catch {
+      // ignore
+    }
+  }, [thicknessUnit]);
+
+  // Handle Playback animation with adjustable speed
   useEffect(() => {
     if (!isPlaying) return;
+    const intervalMs = Math.max(150, Math.round(1800 / playSpeed));
     const interval = setInterval(() => {
       setActiveStepIndex((prev) => {
         if (prev >= flow.steps.length - 1) {
@@ -84,9 +104,18 @@ export default function App() {
         }
         return prev + 1;
       });
-    }, 1800);
+    }, intervalMs);
     return () => clearInterval(interval);
-  }, [isPlaying, flow.steps.length]);
+  }, [isPlaying, flow.steps.length, playSpeed]);
+
+  const handleTogglePlay = () => {
+    if (!isPlaying && flow.steps.length > 0 && activeStepIndex >= flow.steps.length - 1) {
+      setActiveStepIndex(0);
+      setIsPlaying(true);
+    } else {
+      setIsPlaying((prev) => !prev);
+    }
+  };
 
   // Clamp activeStepIndex if steps count changes
   useEffect(() => {
@@ -110,13 +139,27 @@ export default function App() {
   // Handlers
   const handleUpdateStep = (updatedStep: ProcessStep) => {
     if (activeStepIndex < 0) return;
+    const prevStep = flow.steps[activeStepIndex];
+    const blockChanged = prevStep && updatedStep.blockId !== prevStep.blockId;
+
+    // Preserve previous blockId temporarily if changed so assignStepToBlock can cleanly detect old vs new block
+    const patchedStep = blockChanged ? { ...updatedStep, blockId: prevStep.blockId } : updatedStep;
     const updatedSteps = flow.steps.map((s, idx) =>
-      idx === activeStepIndex ? updatedStep : s
+      idx === activeStepIndex ? patchedStep : s
     );
     let updatedFlow = { ...flow, steps: updatedSteps };
     if (updatedStep.type === 'lithography') {
       updatedFlow = syncStepWindowsToMask(updatedFlow, updatedStep);
     }
+
+    if (blockChanged) {
+      updatedFlow = assignStepToBlock(updatedFlow, updatedStep.id, updatedStep.blockId || null);
+      const newIdx = updatedFlow.steps.findIndex((s) => s.id === updatedStep.id);
+      if (newIdx >= 0 && newIdx !== activeStepIndex) {
+        setActiveStepIndex(newIdx);
+      }
+    }
+
     setFlow(updatedFlow);
   };
 
@@ -169,7 +212,11 @@ export default function App() {
         flow={flow}
         activeStepIndex={activeStepIndex}
         isPlaying={isPlaying}
-        onTogglePlay={() => setIsPlaying(!isPlaying)}
+        playSpeed={playSpeed}
+        onChangePlaySpeed={setPlaySpeed}
+        thicknessUnit={thicknessUnit}
+        onChangeThicknessUnit={setThicknessUnit}
+        onTogglePlay={handleTogglePlay}
         onStepChange={(idx) => {
           setActiveStepIndex(idx);
           setIsPlaying(false);
@@ -199,6 +246,7 @@ export default function App() {
             <ProcessFlowSidebar
               flow={flow}
               activeStepIndex={activeStepIndex}
+              thicknessUnit={thicknessUnit}
               onSelectStepIndex={(idx) => {
                 setActiveStepIndex(idx);
                 setIsPlaying(false);
@@ -233,6 +281,7 @@ export default function App() {
               polygons={activePolygons}
               materials={flow.materials}
               waferWidth={flow.substrateWidth}
+              thicknessUnit={thicknessUnit}
               title={flow.title}
               stepNumber={isSubstrateActive ? 0 : activeStepIndex + 1}
               totalSteps={flow.steps.length}
@@ -241,6 +290,7 @@ export default function App() {
                   ? 'Multi-Layer Starting Substrate Stack'
                   : activeStep?.title
               }
+              activeStepSide={isSubstrateActive ? undefined : activeStep?.side}
             />
           </div>
         </main>
@@ -251,6 +301,7 @@ export default function App() {
             {isSubstrateActive ? (
               <SubstrateEditor
                 flow={flow}
+                thicknessUnit={thicknessUnit}
                 onUpdateFlow={setFlow}
                 onOpenMaterialsModal={() => setShowMaterials(true)}
               />
@@ -259,8 +310,21 @@ export default function App() {
                 step={activeStep}
                 waferWidth={flow.substrateWidth}
                 materials={flow.materials}
+                thicknessUnit={thicknessUnit}
                 onUpdateStep={handleUpdateStep}
                 onOpenMaterialsModal={() => setShowMaterials(true)}
+                onMergeMaterials={(incomingMats) => {
+                  const existingIds = new Set(flow.materials.map((m) => m.id));
+                  const missing = incomingMats.filter((m) => !existingIds.has(m.id));
+                  if (missing.length > 0) {
+                    setFlow((prev) => {
+                      const prevIds = new Set(prev.materials.map((m) => m.id));
+                      const toAdd = incomingMats.filter((m) => !prevIds.has(m.id));
+                      if (toAdd.length === 0) return prev;
+                      return { ...prev, materials: [...prev.materials, ...toAdd] };
+                    });
+                  }
+                }}
                 blocks={flow.blocks}
                 masks={flow.masks}
                 onOpenMaskLevelsModal={(maskId) => {
@@ -269,10 +333,17 @@ export default function App() {
                 }}
                 onCreateBlock={(name) => {
                   const { flow: updated, block: newBlock } = createBlock(flow, name);
-                  const updatedSteps = updated.steps.map((s, idx) =>
-                    idx === activeStepIndex ? { ...s, blockId: newBlock.id } : s
-                  );
-                  setFlow({ ...updated, steps: updatedSteps });
+                  const currentStep = updated.steps[activeStepIndex];
+                  if (currentStep) {
+                    const assignedFlow = assignStepToBlock(updated, currentStep.id, newBlock.id);
+                    const newIdx = assignedFlow.steps.findIndex((s) => s.id === currentStep.id);
+                    setFlow(assignedFlow);
+                    if (newIdx >= 0 && newIdx !== activeStepIndex) {
+                      setActiveStepIndex(newIdx);
+                    }
+                  } else {
+                    setFlow(updated);
+                  }
                 }}
               />
             ) : null}
@@ -313,6 +384,7 @@ export default function App() {
       {showRunSheet && (
         <RunSheetModal
           flow={flow}
+          thicknessUnit={thicknessUnit}
           onClose={() => setShowRunSheet(false)}
         />
       )}
@@ -320,6 +392,7 @@ export default function App() {
       {showMultiStep && (
         <MultiStepFlowView
           flow={flow}
+          thicknessUnit={thicknessUnit}
           onSelectStepIndex={(idx) => setActiveStepIndex(idx)}
           onClose={() => setShowMultiStep(false)}
         />

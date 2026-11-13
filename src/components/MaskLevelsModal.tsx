@@ -753,6 +753,11 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                           return (
                             <option key={step.id} value={step.id}>
                               Step {index + 1}: {step.title}
+                              {step.side === 'back'
+                                ? ' (Backside)'
+                                : step.side === 'both'
+                                ? ' (Both Sides)'
+                                : ''}
                               {isCurrent
                                 ? '  [Current Assigned Step]'
                                 : conflicting

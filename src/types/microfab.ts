@@ -11,7 +11,10 @@ export type ProcessStepType =
   | 'strip'
   | 'liftoff'
   | 'cmp'
-  | 'anneal';
+  | 'anneal'
+  | 'bonding';
+
+export type ProcessSide = 'front' | 'back' | 'both';
 
 export type PatternType = 
   | 'solid'
@@ -92,6 +95,8 @@ export interface EtchConfig {
   stopLayerMaterialId?: string; // stops etch when reaching this material
   scallopEffect?: boolean; // Bosch DRIE sidewall scallops
   selectivityToMask?: number; // e.g. 20 (mask etches 20x slower)
+  ardeEnabled?: boolean; // Aspect Ratio Dependent Etching (RIE Lag) for dry etching
+  ardeStrength?: number; // Lag factor k (0.1 = mild to 1.0 = strong, default 0.5)
 }
 
 export interface StripConfig {
@@ -101,10 +106,25 @@ export interface StripConfig {
 }
 
 export interface CmpConfig {
+  operation?: 'cmp' | 'grind' | 'polish';
   mode: 'polish-depth' | 'stop-on-layer' | 'target-height';
   depth?: number; // nm removed
   targetHeight?: number; // absolute height to level down to
   stopMaterialId?: string;
+}
+
+export interface BondingConfig {
+  sourceType: 'custom-substrate' | 'imported-flow';
+  bondingMethod: 'fusion' | 'anodic' | 'adhesive' | 'eutectic' | 'hybrid';
+  incomingFace?: 'front' | 'back';
+  customLayers?: SubstrateLayer[];
+  importedFlow?: ProcessFlow;
+  importedFlowTitle?: string;
+  interfaceLayer?: {
+    enabled: boolean;
+    materialId: string;
+    thickness: number; // nm
+  };
 }
 
 export interface ToolRecipe {
@@ -124,12 +144,14 @@ export interface ProcessBlock {
   description?: string;
   color?: string; // hex color for block visual distinction
   collapsed?: boolean;
+  placeholderStepIndex?: number; // Timeline step position when block has 0 steps
 }
 
 export interface ProcessStep {
   id: string;
   title: string;
   type: ProcessStepType;
+  side?: ProcessSide; // Defaults to 'front' when omitted
   enabled: boolean;
   notes?: string;
   materialId?: string;
@@ -142,6 +164,7 @@ export interface ProcessStep {
   etch?: EtchConfig;
   strip?: StripConfig;
   cmp?: CmpConfig;
+  bonding?: BondingConfig;
   toolRecipe?: ToolRecipe;
 }
 
@@ -176,6 +199,7 @@ export interface MaterialSegment {
   yTop: number;    // nm
   materialId: string;
   stepId?: string;
+  side?: 'front' | 'back';
   isOverhang?: boolean;
 }
 

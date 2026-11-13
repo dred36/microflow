@@ -3,16 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ProcessStep,
+  ProcessFlow,
+  SubstrateLayer,
   Material,
   ProcessStepType,
+  ProcessSide,
   ToolRecipe,
   MaskWindow,
   ProcessBlock,
   PhotomaskLevel,
+  BondingConfig,
 } from '../types/microfab';
+import { ThicknessUnit, getUnitLabel } from '../lib/units';
+import { ThicknessInput } from './ThicknessInput';
 import {
   Layers,
   Sliders,
@@ -30,14 +36,24 @@ import {
   Plus,
   Trash2,
   Scan,
+  Edit2,
+  Check,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+  Link2,
+  Upload,
+  FileCheck,
 } from 'lucide-react';
 
 interface StepEditorProps {
   step: ProcessStep;
   waferWidth: number;
   materials: Material[];
+  thicknessUnit?: ThicknessUnit;
   onUpdateStep: (updated: ProcessStep) => void;
   onOpenMaterialsModal: () => void;
+  onMergeMaterials?: (materials: Material[]) => void;
   blocks?: ProcessBlock[];
   masks?: PhotomaskLevel[];
   onOpenMaskLevelsModal?: (maskId?: string) => void;
@@ -48,8 +64,10 @@ export const StepEditor: React.FC<StepEditorProps> = ({
   step,
   waferWidth,
   materials,
+  thicknessUnit = 'nm',
   onUpdateStep,
   onOpenMaterialsModal,
+  onMergeMaterials,
   blocks,
   masks,
   onOpenMaskLevelsModal,
@@ -58,6 +76,15 @@ export const StepEditor: React.FC<StepEditorProps> = ({
   const [activeTab, setActiveTab] = useState<'process' | 'equipment' | 'notes'>('process');
   const [isAddingBlockInline, setIsAddingBlockInline] = useState<boolean>(false);
   const [inlineBlockName, setInlineBlockName] = useState<string>('');
+  const [isEditingMaskName, setIsEditingMaskName] = useState<boolean>(false);
+  const [editingMaskName, setEditingMaskName] = useState<string>('');
+  const [bondingImportError, setBondingImportError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsEditingMaskName(false);
+    setEditingMaskName(step.lithography?.maskName || '');
+    setBondingImportError(null);
+  }, [step.id, step.lithography?.maskName]);
 
   const handleUpdate = (patch: Partial<ProcessStep>) => {
     onUpdateStep({ ...step, ...patch });
@@ -232,24 +259,107 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 value={step.type}
                 onChange={(e) => {
                   const newType = e.target.value as ProcessStepType;
-                  handleUpdate({
+                  const patch: Partial<ProcessStep> = {
                     type: newType,
-                    // Initialize sensible defaults for the new type if missing
                     thickness: step.thickness || 200,
-                  });
+                  };
+                  if (newType === 'cmp' && !step.cmp) {
+                    patch.cmp = {
+                      operation: 'cmp',
+                      mode: 'polish-depth',
+                      depth: 300,
+                    };
+                  }
+                  if (newType === 'bonding') {
+                    if (step.side === 'both') {
+                      patch.side = 'front';
+                    }
+                    if (!step.bonding) {
+                      patch.bonding = {
+                        sourceType: 'custom-substrate',
+                        bondingMethod: 'fusion',
+                        incomingFace: 'front',
+                        customLayers: [
+                          {
+                            id: `bond_layer_${Date.now()}`,
+                            name: 'Cap Wafer (Silicon <100>)',
+                            materialId: 'mat_si_sub',
+                            thickness: 2500,
+                          },
+                        ],
+                      };
+                    }
+                  }
+                  handleUpdate(patch);
                 }}
                 className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-200 text-xs font-medium focus:outline-none focus:border-sky-500"
               >
                 <option value="deposition">Deposition / Thin Film Growth</option>
-                <option value="lithography">Photolithography & Patterning</option>
+                <option value="lithography">Photolithography &amp; Patterning</option>
                 <option value="etch">Etching (Dry RIE / Wet / Bosch DRIE)</option>
                 <option value="strip">Strip / Sacrificial Release</option>
                 <option value="liftoff">Metal Lift-off</option>
-                <option value="cmp">Chemical Mechanical Polishing (CMP)</option>
+                <option value="cmp">Grind/Polish/Planarize (Grinding &amp; CMP)</option>
+                <option value="bonding">Wafer Bonding (Substrate / Pre-Processed Flow)</option>
                 <option value="anneal">Thermal Anneal / Drive-In</option>
                 <option value="substrate">Substrate Initialization</option>
               </select>
             </div>
+
+            {/* Wafer Processing Side Selector (Front / Back / Both) */}
+            {step.type !== 'substrate' && step.type !== 'anneal' && (
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-slate-400">
+                    {step.type === 'bonding' ? 'Bond Target Side' : 'Substrate Side'}
+                  </label>
+                  <span className="text-[10px] font-mono text-slate-500">
+                    {(step.side || 'front') === 'front'
+                      ? 'Top Surface (+Z)'
+                      : step.side === 'back'
+                      ? 'Backside (-Z)'
+                      : 'Double-Sided (±Z)'}
+                  </span>
+                </div>
+                <div
+                  className={`grid ${
+                    step.type === 'bonding' ? 'grid-cols-2' : 'grid-cols-3'
+                  } gap-1 p-1 rounded-lg bg-slate-950 border border-slate-800 text-xs`}
+                >
+                  {(
+                    [
+                      { id: 'front' as ProcessSide, label: 'Front', icon: ArrowUp, activeClass: 'bg-sky-600 text-white shadow-sm' },
+                      { id: 'back' as ProcessSide, label: 'Back', icon: ArrowDown, activeClass: 'bg-amber-600 text-white shadow-sm' },
+                      ...(step.type === 'bonding'
+                        ? []
+                        : [{ id: 'both' as ProcessSide, label: 'Both Sides', icon: ArrowUpDown, activeClass: 'bg-emerald-600 text-white shadow-sm' }]),
+                    ]
+                  ).map((opt) => {
+                    const currentSide: ProcessSide =
+                      step.type === 'bonding' && step.side === 'both'
+                        ? 'front'
+                        : step.side || 'front';
+                    const isActive = currentSide === opt.id;
+                    const Icon = opt.icon;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => handleUpdate({ side: opt.id })}
+                        className={`flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md font-medium transition-all ${
+                          isActive
+                            ? opt.activeClass
+                            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                        }`}
+                      >
+                        <Icon className="w-3.5 h-3.5 shrink-0" />
+                        <span>{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Customization for DEPOSITION */}
             {step.type === 'deposition' && (
@@ -281,15 +391,11 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] text-slate-400 mb-1">
-                      Film Thickness (nm)
+                      Film Thickness ({getUnitLabel(thicknessUnit)})
                     </label>
-                    <input
-                      type="number"
-                      min="5"
-                      step="10"
-                      value={step.deposition?.thickness ?? step.thickness ?? 200}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value || '0');
+                    <ThicknessInput
+                      valueNm={step.deposition?.thickness ?? step.thickness ?? 200}
+                      onChangeNm={(val) => {
                         handleUpdate({
                           thickness: val,
                           deposition: {
@@ -302,6 +408,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           },
                         });
                       }}
+                      unit={thicknessUnit}
+                      minNm={5}
+                      stepNm={10}
                       className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
                     />
                   </div>
@@ -440,10 +549,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               }),
                               maskId: matchingMask.id,
                               maskName: matchingMask.name,
+                              maskColor: matchingMask.color,
                               polarity: matchingMask.polarity,
                               windows: matchingMask.windows.map((w) => ({ ...w })),
                             },
                           });
+                          setIsEditingMaskName(false);
                         } else {
                           handleUpdate({
                             lithography: {
@@ -451,6 +562,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               maskId: undefined,
                             },
                           });
+                          setIsEditingMaskName(false);
                         }
                       }}
                       className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-sky-500"
@@ -462,6 +574,86 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  {/* Click-to-edit Assigned Mask Name */}
+                  <div className="flex items-center justify-between gap-2 pt-0.5">
+                    <span className="text-[11px] text-slate-400 shrink-0">Mask Name:</span>
+                    {isEditingMaskName ? (
+                      <div className="flex items-center gap-1 flex-1 min-w-0">
+                        <input
+                          type="text"
+                          autoFocus
+                          value={editingMaskName}
+                          onChange={(e) => setEditingMaskName(e.target.value)}
+                          onBlur={() => {
+                            const trimmed = editingMaskName.trim();
+                            if (trimmed && step.lithography) {
+                              handleUpdate({
+                                lithography: {
+                                  ...step.lithography,
+                                  maskName: trimmed,
+                                },
+                              });
+                            }
+                            setIsEditingMaskName(false);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const trimmed = editingMaskName.trim();
+                              if (trimmed && step.lithography) {
+                                handleUpdate({
+                                  lithography: {
+                                    ...step.lithography,
+                                    maskName: trimmed,
+                                  },
+                                });
+                              }
+                              setIsEditingMaskName(false);
+                            }
+                            if (e.key === 'Escape') {
+                              setIsEditingMaskName(false);
+                            }
+                          }}
+                          className="flex-1 min-w-0 px-2 py-0.5 rounded bg-slate-950 border border-sky-500 text-xs text-white font-mono focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            const trimmed = editingMaskName.trim();
+                            if (trimmed && step.lithography) {
+                              handleUpdate({
+                                lithography: {
+                                  ...step.lithography,
+                                  maskName: trimmed,
+                                },
+                              });
+                            }
+                            setIsEditingMaskName(false);
+                          }}
+                          className="p-0.5 text-emerald-400 hover:text-emerald-300"
+                          title="Save Mask Name"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingMaskName(step.lithography?.maskName || 'Photomask Layer');
+                          setIsEditingMaskName(true);
+                        }}
+                        className="group/editmask flex items-center gap-1.5 text-xs font-mono text-slate-200 hover:text-white px-2 py-0.5 rounded bg-slate-950/60 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 transition-colors truncate min-w-0"
+                        title="Click to rename assigned mask"
+                      >
+                        <span className="truncate">
+                          {step.lithography?.maskName || 'Photomask Layer'}
+                        </span>
+                        <Edit2 className="w-3 h-3 text-slate-500 group-hover/editmask:text-sky-400 shrink-0" />
+                      </button>
+                    )}
                   </div>
 
                   {step.lithography?.windows && (
@@ -505,14 +697,11 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                   <div>
                     <label className="block text-[11px] text-slate-400 mb-1">
-                      Resist Thickness (nm)
+                      Resist Thickness ({getUnitLabel(thicknessUnit)})
                     </label>
-                    <input
-                      type="number"
-                      min="100"
-                      step="100"
-                      value={step.lithography?.resistThickness ?? 1000}
-                      onChange={(e) =>
+                    <ThicknessInput
+                      valueNm={step.lithography?.resistThickness ?? 1000}
+                      onChangeNm={(val) =>
                         handleUpdate({
                           lithography: {
                             ...(step.lithography || {
@@ -523,10 +712,13 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               exposureMethod: 'UV Contact (365nm)',
                               resistThickness: 1000,
                             }),
-                            resistThickness: parseFloat(e.target.value || '1000'),
+                            resistThickness: val,
                           },
                         })
                       }
+                      unit={thicknessUnit}
+                      minNm={100}
+                      stepNm={100}
                       className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
                     />
                   </div>
@@ -596,15 +788,11 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] text-slate-400 mb-1">
-                      Etch Depth (nm)
+                      Etch Depth ({getUnitLabel(thicknessUnit)})
                     </label>
-                    <input
-                      type="number"
-                      min="10"
-                      step="25"
-                      value={step.etch?.depth ?? step.thickness ?? 300}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value || '0');
+                    <ThicknessInput
+                      valueNm={step.etch?.depth ?? step.thickness ?? 300}
+                      onChangeNm={(val) => {
                         handleUpdate({
                           thickness: val,
                           etch: {
@@ -619,6 +807,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           },
                         });
                       }}
+                      unit={thicknessUnit}
+                      minNm={10}
+                      stepNm={25}
                       className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
                     />
                   </div>
@@ -629,7 +820,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     </label>
                     <select
                       value={step.etch?.etchType || 'rie'}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const nextEtchType = e.target.value as any;
                         handleUpdate({
                           etch: {
                             ...(step.etch || {
@@ -639,16 +831,23 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               sidewallAngle: 90,
                               etchType: 'rie',
                             }),
-                            etchType: e.target.value as any,
+                            etchType: nextEtchType,
                             isotropy:
-                              e.target.value === 'wet-isotropic'
+                              nextEtchType === 'wet-isotropic'
                                 ? 0.95
-                                : e.target.value === 'drie-bosch'
+                                : nextEtchType === 'drie-bosch'
                                 ? 0.02
                                 : 0.05,
+                            sidewallAngle:
+                              nextEtchType === 'wet-koh'
+                                ? 54.74
+                                : step.etch?.sidewallAngle === 54.74
+                                ? 90
+                                : step.etch?.sidewallAngle ?? 90,
+                            scallopEffect: nextEtchType === 'drie-bosch',
                           },
-                        })
-                      }
+                        });
+                      }}
                       className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
                     >
                       <option value="rie">Reactive Ion Etch (RIE)</option>
@@ -744,6 +943,76 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     ))}
                   </select>
                 </div>
+
+                {/* Aspect Ratio Dependent Etching (ARDE / RIE Lag) for Dry Etching */}
+                {(['rie', 'drie-bosch', 'ion-beam', 'ashing'].includes(
+                  step.etch?.etchType || 'rie'
+                )) && (
+                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(step.etch?.ardeEnabled)}
+                        onChange={(e) =>
+                          handleUpdate({
+                            etch: {
+                              ...(step.etch || {
+                                etchType: 'rie',
+                                depth: step.thickness || 300,
+                                targetMaterialId: 'all',
+                                isotropy: 0.05,
+                                sidewallAngle: 90,
+                              }),
+                              ardeEnabled: e.target.checked,
+                              ardeStrength: step.etch?.ardeStrength ?? 0.5,
+                            },
+                          })
+                        }
+                        className="mt-0.5 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0"
+                      />
+                      <div>
+                        <span className="text-[11px] font-medium text-slate-200 block">
+                          Apply ARDE / RIE Lag Effect
+                        </span>
+                        <span className="text-[10px] text-slate-400 leading-snug block">
+                          Narrow openings etch shallower than wide openings based on local feature aspect ratio.
+                        </span>
+                      </div>
+                    </label>
+
+                    {step.etch?.ardeEnabled && (
+                      <div>
+                        <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                          <span>RIE Lag Strength (k)</span>
+                          <span className="font-mono text-amber-400">
+                            {Math.round((step.etch?.ardeStrength ?? 0.5) * 100)}%{' '}
+                            {(step.etch?.ardeStrength ?? 0.5) < 0.35
+                              ? '(Mild)'
+                              : (step.etch?.ardeStrength ?? 0.5) > 0.7
+                              ? '(Strong)'
+                              : '(Moderate)'}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="10"
+                          max="100"
+                          step="5"
+                          value={Math.round((step.etch?.ardeStrength ?? 0.5) * 100)}
+                          onChange={(e) =>
+                            handleUpdate({
+                              etch: {
+                                ...step.etch!,
+                                ardeStrength: parseInt(e.target.value) / 100,
+                              },
+                            })
+                          }
+                          className="w-full accent-amber-500"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -824,16 +1093,38 @@ export const StepEditor: React.FC<StepEditorProps> = ({
               </div>
             )}
 
-            {/* Customization for CMP */}
+            {/* Customization for Grind / Polish / Planarize (CMP & Grinding) */}
             {step.type === 'cmp' && (
               <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
                 <span className="text-xs font-semibold text-cyan-400">
-                  CMP Planarization Parameters
+                  Grind / Polish / Planarize Parameters
                 </span>
 
                 <div>
                   <label className="block text-[11px] text-slate-400 mb-1">
-                    Polish Mode
+                    Operation Type
+                  </label>
+                  <select
+                    value={step.cmp?.operation || 'cmp'}
+                    onChange={(e) =>
+                      handleUpdate({
+                        cmp: {
+                          ...(step.cmp || { mode: 'polish-depth', depth: 300 }),
+                          operation: e.target.value as any,
+                        },
+                      })
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="cmp">CMP Planarization (Chemical Mechanical Polish)</option>
+                    <option value="grind">Mechanical Wafer Grinding / Thinning</option>
+                    <option value="polish">Fine Lapping / Surface Polishing</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    Removal / Planarization Mode
                   </label>
                   <select
                     value={step.cmp?.mode || 'polish-depth'}
@@ -847,30 +1138,53 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     }
                     className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
                   >
-                    <option value="polish-depth">Fixed Polish Depth (nm)</option>
-                    <option value="stop-on-layer">Endpoint Stop on Polish-Stop Layer</option>
-                    <option value="target-height">Planarize to Absolute Height (nm)</option>
+                    <option value="polish-depth">Fixed Removal Depth ({getUnitLabel(thicknessUnit)})</option>
+                    <option value="stop-on-layer">Endpoint Stop on Barrier Layer</option>
+                    <option value="target-height">Planarize to Absolute Z Plane ({getUnitLabel(thicknessUnit)})</option>
                   </select>
                 </div>
 
-                {step.cmp?.mode === 'polish-depth' && (
+                {(step.cmp?.mode || 'polish-depth') === 'polish-depth' && (
                   <div>
                     <label className="block text-[11px] text-slate-400 mb-1">
-                      Removed Polish Thickness (nm)
+                      Removed Thickness / Grind Depth ({getUnitLabel(thicknessUnit)})
                     </label>
-                    <input
-                      type="number"
-                      min="10"
-                      step="25"
-                      value={step.cmp?.depth ?? 300}
-                      onChange={(e) =>
+                    <ThicknessInput
+                      valueNm={step.cmp?.depth ?? 300}
+                      onChangeNm={(val) =>
                         handleUpdate({
                           cmp: {
-                            ...step.cmp!,
-                            depth: parseFloat(e.target.value || '0'),
+                            ...(step.cmp || { mode: 'polish-depth' }),
+                            depth: val,
                           },
                         })
                       }
+                      unit={thicknessUnit}
+                      minNm={10}
+                      stepNm={25}
+                      className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
+                )}
+
+                {step.cmp?.mode === 'target-height' && (
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      Target Z Plane Coordinate ({getUnitLabel(thicknessUnit)})
+                    </label>
+                    <ThicknessInput
+                      valueNm={step.cmp?.targetHeight ?? 2500}
+                      onChangeNm={(val) =>
+                        handleUpdate({
+                          cmp: {
+                            ...(step.cmp || { mode: 'target-height' }),
+                            targetHeight: val,
+                          },
+                        })
+                      }
+                      unit={thicknessUnit}
+                      minNm={-10000}
+                      stepNm={50}
                       className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
                     />
                   </div>
@@ -886,7 +1200,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       onChange={(e) =>
                         handleUpdate({
                           cmp: {
-                            ...step.cmp!,
+                            ...(step.cmp || { mode: 'stop-on-layer' }),
                             stopMaterialId: e.target.value,
                           },
                         })
@@ -903,6 +1217,439 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 )}
               </div>
             )}
+
+            {/* Customization for WAFER BONDING */}
+            {step.type === 'bonding' && (() => {
+              const bondCfg: BondingConfig = step.bonding || {
+                sourceType: 'custom-substrate',
+                bondingMethod: 'fusion',
+                incomingFace: 'front',
+                customLayers: [
+                  {
+                    id: 'bond_layer_default',
+                    name: 'Cap Wafer (Silicon <100>)',
+                    materialId: 'mat_si_sub',
+                    thickness: 2500,
+                  },
+                ],
+              };
+              const customLayers: SubstrateLayer[] =
+                bondCfg.customLayers && bondCfg.customLayers.length > 0
+                  ? bondCfg.customLayers
+                  : [
+                      {
+                        id: 'bond_layer_default',
+                        name: 'Cap Wafer (Silicon <100>)',
+                        materialId: 'mat_si_sub',
+                        thickness: 2500,
+                      },
+                    ];
+
+              const updateBonding = (patch: Partial<BondingConfig>) => {
+                handleUpdate({
+                  bonding: {
+                    ...bondCfg,
+                    ...patch,
+                  },
+                });
+              };
+
+              const handleBondFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setBondingImportError(null);
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                  try {
+                    const parsed = JSON.parse(ev.target?.result as string) as ProcessFlow;
+                    if (!parsed || !Array.isArray(parsed.steps) || !parsed.substrateWidth) {
+                      setBondingImportError('Invalid MicroFlow JSON: missing steps or substrateWidth.');
+                      return;
+                    }
+                    if (!parsed.substrateLayers || parsed.substrateLayers.length === 0) {
+                      parsed.substrateLayers = [
+                        {
+                          id: 'sub_imported_default',
+                          name: 'Bulk Silicon <100>',
+                          materialId: parsed.substrateMaterialId || 'mat_si_sub',
+                          thickness: parsed.substrateThickness || 3000,
+                        },
+                      ];
+                    }
+                    if (parsed.materials && parsed.materials.length > 0 && onMergeMaterials) {
+                      onMergeMaterials(parsed.materials);
+                    }
+                    updateBonding({
+                      sourceType: 'imported-flow',
+                      importedFlow: parsed,
+                      importedFlowTitle: parsed.title || file.name,
+                    });
+                  } catch {
+                    setBondingImportError('Could not parse JSON process file.');
+                  }
+                };
+                reader.readAsText(file);
+                e.target.value = '';
+              };
+
+              return (
+                <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-indigo-400 flex items-center gap-1.5">
+                      <Link2 className="w-3.5 h-3.5" />
+                      <span>Wafer Bonding Parameters</span>
+                    </span>
+                  </div>
+
+                  {/* Bonding Method */}
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      Bonding Mechanism
+                    </label>
+                    <select
+                      value={bondCfg.bondingMethod || 'fusion'}
+                      onChange={(e) =>
+                        updateBonding({ bondingMethod: e.target.value as any })
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="fusion">Direct / Fusion Bond (Si–Si / SiO₂–SiO₂)</option>
+                      <option value="anodic">Anodic Bond (Si–Glass / Quartz)</option>
+                      <option value="adhesive">Adhesive / Polymer Bond (SU-8 / BCB)</option>
+                      <option value="eutectic">Eutectic / Thermo-Compression (Au–Au / Au–Sn)</option>
+                      <option value="hybrid">Cu–Cu Hybrid Direct Bond</option>
+                    </select>
+                  </div>
+
+                  {/* Second Wafer Source Selector */}
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      Bonded Substrate Source
+                    </label>
+                    <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => updateBonding({ sourceType: 'custom-substrate' })}
+                        className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                          bondCfg.sourceType === 'custom-substrate'
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        New User Substrate
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateBonding({ sourceType: 'imported-flow' })}
+                        className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                          bondCfg.sourceType === 'imported-flow'
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Imported Process File
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Incoming Wafer Orientation */}
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      Incoming Wafer Mating Face
+                    </label>
+                    <select
+                      value={bondCfg.incomingFace || 'front'}
+                      onChange={(e) =>
+                        updateBonding({ incomingFace: e.target.value as 'front' | 'back' })
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="front">Frontside Face (Face-to-Face / Flip-Chip)</option>
+                      <option value="back">Backside Face (Face-to-Back Stacking)</option>
+                    </select>
+                  </div>
+
+                  {/* Source 1: Newly User-Defined Substrate Stack */}
+                  {bondCfg.sourceType === 'custom-substrate' && (
+                    <div className="space-y-2.5 pt-2 border-t border-slate-800">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-slate-300">
+                          Bonded Substrate Stack ({customLayers.length}{' '}
+                          {customLayers.length === 1 ? 'Layer' : 'Layers'})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateBonding({
+                              customLayers: [
+                                ...customLayers,
+                                {
+                                  id: `bond_layer_${Date.now()}`,
+                                  name: `Film Layer #${customLayers.length + 1}`,
+                                  materialId: 'mat_sio2_thermal',
+                                  thickness: 300,
+                                },
+                              ],
+                            })
+                          }
+                          className="flex items-center gap-1 px-2 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-medium"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Add Layer</span>
+                        </button>
+                      </div>
+
+                      {/* Quick Substrate Presets */}
+                      <div className="flex flex-wrap gap-1">
+                        {[
+                          {
+                            label: 'Bare Si',
+                            layers: [
+                              { name: 'Silicon <100>', materialId: 'mat_si_sub', thickness: 2500 },
+                            ],
+                          },
+                          {
+                            label: 'Quartz Cap',
+                            layers: [
+                              { name: 'Quartz Glass Lid', materialId: 'mat_quartz', thickness: 2000 },
+                            ],
+                          },
+                          {
+                            label: 'Si + Oxide',
+                            layers: [
+                              { name: 'Silicon Handle', materialId: 'mat_si_sub', thickness: 2500 },
+                              { name: 'Thermal Oxide', materialId: 'mat_sio2_thermal', thickness: 400 },
+                            ],
+                          },
+                        ].map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() =>
+                              updateBonding({
+                                customLayers: preset.layers.map((l, idx) => ({
+                                  ...l,
+                                  id: `bond_layer_${Date.now()}_${idx}`,
+                                })),
+                              })
+                            }
+                            className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[10px] text-slate-300 hover:text-white transition-colors"
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Layer cards (rendered top surface first) */}
+                      <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
+                        {[...customLayers].reverse().map((layer, revIdx) => {
+                          const actualIdx = customLayers.length - 1 - revIdx;
+                          return (
+                            <div
+                              key={layer.id}
+                              className="p-2 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-1.5">
+                                <input
+                                  type="text"
+                                  value={layer.name || ''}
+                                  onChange={(e) => {
+                                    const next = customLayers.map((l, i) =>
+                                      i === actualIdx ? { ...l, name: e.target.value } : l
+                                    );
+                                    updateBonding({ customLayers: next });
+                                  }}
+                                  placeholder="Layer name..."
+                                  className="flex-1 px-2 py-0.5 rounded bg-slate-950 border border-slate-700 text-[11px] text-white focus:outline-none focus:border-sky-500"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={customLayers.length <= 1}
+                                  onClick={() => {
+                                    if (customLayers.length <= 1) return;
+                                    updateBonding({
+                                      customLayers: customLayers.filter((_, i) => i !== actualIdx),
+                                    });
+                                  }}
+                                  className="p-1 rounded text-slate-400 hover:text-rose-400 disabled:opacity-20"
+                                  title="Remove Layer"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2">
+                                <select
+                                  value={layer.materialId}
+                                  onChange={(e) => {
+                                    const next = customLayers.map((l, i) =>
+                                      i === actualIdx ? { ...l, materialId: e.target.value } : l
+                                    );
+                                    updateBonding({ customLayers: next });
+                                  }}
+                                  className="px-2 py-1 rounded bg-slate-950 border border-slate-700 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500"
+                                >
+                                  {materials.map((m) => (
+                                    <option key={m.id} value={m.id}>
+                                      {m.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <div className="flex items-center gap-1">
+                                  <ThicknessInput
+                                    valueNm={layer.thickness}
+                                    onChangeNm={(val) => {
+                                      const next = customLayers.map((l, i) =>
+                                        i === actualIdx ? { ...l, thickness: val } : l
+                                      );
+                                      updateBonding({ customLayers: next });
+                                    }}
+                                    unit={thicknessUnit}
+                                    minNm={5}
+                                    stepNm={50}
+                                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-[11px] font-mono text-white focus:outline-none focus:border-sky-500"
+                                  />
+                                  <span className="text-[10px] text-slate-500">
+                                    {getUnitLabel(thicknessUnit)}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Source 2: Pre-Processed Substrate from Imported Process JSON */}
+                  {bondCfg.sourceType === 'imported-flow' && (
+                    <div className="space-y-2.5 pt-2 border-t border-slate-800">
+                      <label className="flex items-center justify-center gap-2 w-full py-2.5 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-indigo-500/60 hover:border-indigo-400 text-xs font-medium text-indigo-300 cursor-pointer transition-colors">
+                        <Upload className="w-4 h-4 shrink-0" />
+                        <span>
+                          {bondCfg.importedFlow
+                            ? 'Replace Imported Process File (.json)'
+                            : 'Import Pre-Processed Wafer (.json)'}
+                        </span>
+                        <input
+                          type="file"
+                          accept=".json"
+                          onChange={handleBondFileUpload}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {bondingImportError && (
+                        <div className="p-2 rounded-lg bg-rose-950/50 border border-rose-500/40 text-[11px] text-rose-300">
+                          {bondingImportError}
+                        </div>
+                      )}
+
+                      {bondCfg.importedFlow ? (
+                        <div className="p-2.5 rounded-lg bg-slate-900 border border-emerald-500/40 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-emerald-300 flex items-center gap-1.5 truncate">
+                              <FileCheck className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">
+                                {bondCfg.importedFlowTitle || bondCfg.importedFlow.title}
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateBonding({
+                                  importedFlow: undefined,
+                                  importedFlowTitle: undefined,
+                                })
+                              }
+                              className="text-[10px] text-slate-400 hover:text-rose-400 shrink-0"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                          <div className="text-[10px] font-mono text-slate-400 flex items-center justify-between">
+                            <span>
+                              {bondCfg.importedFlow.steps.filter((s) => s.enabled).length} enabled steps simulated
+                            </span>
+                            <span>
+                              Width: {(bondCfg.importedFlow.substrateWidth / 1000).toFixed(1)} µm
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 italic leading-relaxed">
+                          Upload an exported MicroFlow <span className="font-mono">.json</span> process file. All its enabled fabrication steps will be simulated and bonded onto the selected side.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Optional Bonding Interface Seam Layer */}
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(bondCfg.interfaceLayer?.enabled)}
+                        onChange={(e) =>
+                          updateBonding({
+                            interfaceLayer: {
+                              enabled: e.target.checked,
+                              materialId: bondCfg.interfaceLayer?.materialId || 'mat_sio2_thermal',
+                              thickness: bondCfg.interfaceLayer?.thickness || 100,
+                            },
+                          })
+                        }
+                        className="rounded bg-slate-800 border-slate-700 text-indigo-500 focus:ring-0"
+                      />
+                      <span>Include Bonding Interface / Adhesive Seam Layer</span>
+                    </label>
+
+                    {bondCfg.interfaceLayer?.enabled && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <select
+                          value={bondCfg.interfaceLayer.materialId}
+                          onChange={(e) =>
+                            updateBonding({
+                              interfaceLayer: {
+                                ...bondCfg.interfaceLayer!,
+                                materialId: e.target.value,
+                              },
+                            })
+                          }
+                          className="px-2 py-1 rounded bg-slate-900 border border-slate-700 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500"
+                        >
+                          {materials.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex items-center gap-1">
+                          <ThicknessInput
+                            valueNm={bondCfg.interfaceLayer.thickness}
+                            onChangeNm={(val) =>
+                              updateBonding({
+                                interfaceLayer: {
+                                  ...bondCfg.interfaceLayer!,
+                                  thickness: val,
+                                },
+                              })
+                            }
+                            unit={thicknessUnit}
+                            minNm={5}
+                            stepNm={25}
+                            className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-[11px] font-mono text-white focus:outline-none focus:border-sky-500"
+                          />
+                          <span className="text-[10px] text-slate-500">
+                            {getUnitLabel(thicknessUnit)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </>
         )}
 

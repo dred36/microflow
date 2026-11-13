@@ -6,24 +6,23 @@
 import React, { useRef, useState, useMemo, useCallback, useEffect } from 'react';
 import {
   ProcessFlow,
+  ProcessSide,
   Material,
   CrossSectionMesh,
   RenderedPolygon,
 } from '../types/microfab';
 import { SvgPatterns } from './SvgPatterns';
 import { getMaterialById } from '../lib/materials';
+import { ThicknessUnit, formatThickness } from '../lib/units';
 import {
   ZoomIn,
   ZoomOut,
   Maximize2,
-  Minimize2,
   Ruler,
-  Layers,
-  Sparkles,
-  Info,
   Download,
   Maximize,
   Minimize,
+  Search,
 } from 'lucide-react';
 
 interface CrossSectionCanvasProps {
@@ -31,10 +30,12 @@ interface CrossSectionCanvasProps {
   polygons: RenderedPolygon[];
   materials: Material[];
   waferWidth: number; // nm
+  thicknessUnit?: ThicknessUnit;
   title?: string;
   stepNumber?: number;
   totalSteps?: number;
   activeStepTitle?: string;
+  activeStepSide?: ProcessSide;
 }
 
 export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
@@ -42,13 +43,16 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   polygons,
   materials,
   waferWidth,
+  thicknessUnit = 'nm',
   title,
   stepNumber,
   totalSteps,
   activeStepTitle,
+  activeStepSide,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
 
   // Dynamic container sizing via ResizeObserver for perfect full-screen and small-window scaling
   const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({
@@ -82,6 +86,15 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Region zoom (Magnifying glass) state
+  const [regionZoomMode, setRegionZoomMode] = useState<boolean>(false);
+  const [zoomSelection, setZoomSelection] = useState<{
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+  } | null>(null);
 
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
@@ -239,7 +252,76 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     fitToScreen,
   ]);
 
-  // Keyboard shortcut: Press 'F' to fit to screen
+  // Convert client pointer position to SVG viewBox coordinates
+  const clientToSvg = useCallback((clientX: number, clientY: number) => {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const svgP = pt.matrixTransform(ctm.inverse());
+    return { x: svgP.x, y: svgP.y };
+  }, []);
+
+  // Uniform zoom around a pivot in SVG coordinates (never distorts geometry aspect ratio)
+  const zoomAroundPoint = useCallback(
+    (targetZoom: number, pivotSvgX: number, pivotSvgY: number) => {
+      const clampedZoom = Math.max(0.12, Math.min(25.0, targetZoom));
+      const ux = (pivotSvgX - pan.x) / zoom;
+      const uy = (pivotSvgY - pan.y) / zoom;
+      setZoom(clampedZoom);
+      setPan({
+        x: pivotSvgX - ux * clampedZoom,
+        y: pivotSvgY - uy * clampedZoom,
+      });
+    },
+    [pan.x, pan.y, zoom]
+  );
+
+  // Commit selected region zoom uniformly so selection aspect ratio never stretches geometry
+  const commitRegionZoom = useCallback(
+    (sel: { startX: number; startY: number; endX: number; endY: number }) => {
+      const selLeft = Math.min(sel.startX, sel.endX);
+      const selRight = Math.max(sel.startX, sel.endX);
+      const selTop = Math.min(sel.startY, sel.endY);
+      const selBottom = Math.max(sel.startY, sel.endY);
+      const selW = selRight - selLeft;
+      const selH = selBottom - selTop;
+
+      if (selW < 8 && selH < 8) {
+        // Single click in magnifying glass mode zooms 2x centered on clicked point
+        zoomAroundPoint(zoom * 2.0, sel.startX, sel.startY);
+        return;
+      }
+
+      const safeSelW = Math.max(8, selW);
+      const safeSelH = Math.max(8, selH);
+
+      // Selection center in unscaled SVG coordinates
+      const selCenterSvgX = (selLeft + selRight) / 2;
+      const selCenterSvgY = (selTop + selBottom) / 2;
+      const uCenterX = (selCenterSvgX - pan.x) / zoom;
+      const uCenterY = (selCenterSvgY - pan.y) / zoom;
+
+      // Apply uniform scalar zoom based on tightest axis so entire region fits without distortion
+      const scaleFactor = Math.min(
+        (svgWidth * 0.92) / safeSelW,
+        (svgHeight * 0.92) / safeSelH
+      );
+      const newZoom = Math.max(0.12, Math.min(25.0, zoom * scaleFactor));
+
+      setZoom(newZoom);
+      setPan({
+        x: svgWidth / 2 - uCenterX * newZoom,
+        y: svgHeight / 2 - uCenterY * newZoom,
+      });
+    },
+    [pan.x, pan.y, zoom, svgWidth, svgHeight, zoomAroundPoint]
+  );
+
+  // Keyboard shortcuts: 'F' to fit to screen, 'Escape' to cancel region zoom / caliper
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
@@ -248,11 +330,20 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
       if (e.key === 'f' || e.key === 'F') {
         e.preventDefault();
         fitToScreen();
+      } else if (e.key === 'Escape') {
+        if (zoomSelection) {
+          setZoomSelection(null);
+        } else if (regionZoomMode) {
+          setRegionZoomMode(false);
+        } else if (measureMode) {
+          setMeasureMode(false);
+          setMeasurePoints([]);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [fitToScreen]);
+  }, [fitToScreen, zoomSelection, regionZoomMode, measureMode]);
 
   // Listen to fullscreen change
   useEffect(() => {
@@ -266,6 +357,38 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, [fitToScreen]);
 
+  // Complete marquee drag even if pointer leaves SVG bounds
+  useEffect(() => {
+    if (!zoomSelection) return;
+    const handleWindowMouseMove = (e: MouseEvent) => {
+      const svgP = clientToSvg(e.clientX, e.clientY);
+      if (!svgP) return;
+      setZoomSelection((prev) =>
+        prev
+          ? {
+              ...prev,
+              endX: Math.max(0, Math.min(svgWidth, svgP.x)),
+              endY: Math.max(0, Math.min(svgHeight, svgP.y)),
+            }
+          : null
+      );
+    };
+    const handleWindowMouseUp = () => {
+      setZoomSelection((prev) => {
+        if (prev) {
+          commitRegionZoom(prev);
+        }
+        return null;
+      });
+    };
+    window.addEventListener('mousemove', handleWindowMouseMove);
+    window.addEventListener('mouseup', handleWindowMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+    };
+  }, [zoomSelection !== null, clientToSvg, commitRegionZoom, svgWidth, svgHeight]);
+
   const toggleFullscreen = () => {
     if (!cardRef.current) return;
     if (!document.fullscreenElement) {
@@ -275,25 +398,30 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     }
   };
 
-  // Mouse pan handlers
+  // Mouse pan / caliper / region zoom handlers
   const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (measureMode) {
-      const svg = e.currentTarget;
-      const ctm = svg.getScreenCTM();
-      if (ctm) {
-        const pt = svg.createSVGPoint();
-        pt.x = e.clientX;
-        pt.y = e.clientY;
-        const svgP = pt.matrixTransform(ctm.inverse());
-        const clickX = (svgP.x - pan.x) / zoom;
-        const clickY = (svgP.y - pan.y) / zoom;
-        const worldPt = toWorld(clickX, clickY);
+    if (e.button !== 0) return;
+    const svgP = clientToSvg(e.clientX, e.clientY);
 
-        if (measurePoints.length >= 2) {
-          setMeasurePoints([worldPt]);
-        } else {
-          setMeasurePoints([...measurePoints, worldPt]);
-        }
+    if (regionZoomMode && svgP) {
+      setZoomSelection({
+        startX: svgP.x,
+        startY: svgP.y,
+        endX: svgP.x,
+        endY: svgP.y,
+      });
+      return;
+    }
+
+    if (measureMode && svgP) {
+      const clickX = (svgP.x - pan.x) / zoom;
+      const clickY = (svgP.y - pan.y) / zoom;
+      const worldPt = toWorld(clickX, clickY);
+
+      if (measurePoints.length >= 2) {
+        setMeasurePoints([worldPt]);
+      } else {
+        setMeasurePoints([...measurePoints, worldPt]);
       }
       return;
     }
@@ -321,7 +449,12 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.15 : 0.88;
-    setZoom((prev) => Math.max(0.15, Math.min(6.0, prev * factor)));
+    const svgP = clientToSvg(e.clientX, e.clientY);
+    if (svgP) {
+      zoomAroundPoint(zoom * factor, svgP.x, svgP.y);
+    } else {
+      zoomAroundPoint(zoom * factor, svgWidth / 2, svgHeight / 2);
+    }
   };
 
   // Download high-res SVG of active canvas
@@ -362,6 +495,16 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
               · {activeStepTitle}
             </span>
           )}
+          {activeStepSide === 'back' && (
+            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-semibold shrink-0">
+              Backside (-Z)
+            </span>
+          )}
+          {activeStepSide === 'both' && (
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[10px] font-semibold shrink-0">
+              Both Sides (±Z)
+            </span>
+          )}
         </div>
 
         {/* Right: Viewport Controls with GUARANTEED Visible Fit Button */}
@@ -369,21 +512,41 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
           {/* PRIMARY: Zoom & Resize to Screen (Fit) Controls - Always preserved! */}
           <div className="flex items-center gap-0.5 bg-slate-800/90 border border-slate-700/80 rounded-lg p-0.5 shrink-0 shadow-sm">
             <button
-              onClick={() => setZoom((z) => Math.max(0.15, z * 0.85))}
+              onClick={() => zoomAroundPoint(zoom * 0.85, svgWidth / 2, svgHeight / 2)}
               className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
               title="Zoom Out (-)"
             >
               <ZoomOut className="w-3.5 h-3.5" />
             </button>
-            <span className="px-1 text-[11px] font-mono text-slate-200 min-w-8 text-center select-none">
+            <span className="px-1 text-[11px] font-mono text-slate-200 min-w-9 text-center select-none">
               {Math.round(zoom * 100)}%
             </span>
             <button
-              onClick={() => setZoom((z) => Math.min(5.0, z * 1.18))}
+              onClick={() => zoomAroundPoint(zoom * 1.18, svgWidth / 2, svgHeight / 2)}
               className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
               title="Zoom In (+)"
             >
               <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            {/* Magnifying Glass Region Zoom */}
+            <button
+              onClick={() => {
+                const next = !regionZoomMode;
+                setRegionZoomMode(next);
+                setZoomSelection(null);
+                if (next) {
+                  setMeasureMode(false);
+                }
+              }}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded transition-all font-medium text-[11px] ${
+                regionZoomMode
+                  ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-300/60'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-700'
+              }`}
+              title="Magnifying Glass: Drag a region to zoom without altering geometry aspect ratio"
+            >
+              <Search className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Zoom Area</span>
             </button>
             {/* The Resize to Screen Button */}
             <button
@@ -403,7 +566,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
           >
             <span className="text-[10px] text-slate-400 font-mono">Z:</span>
             <select
-              value={zScale}
+              value={zScale.toFixed(1)}
               onChange={(e) => setZScale(parseFloat(e.target.value))}
               className="bg-transparent text-white font-mono text-[11px] focus:outline-none cursor-pointer"
             >
@@ -431,8 +594,13 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
           {/* Caliper Measurement tool */}
           <button
             onClick={() => {
-              setMeasureMode(!measureMode);
+              const next = !measureMode;
+              setMeasureMode(next);
               setMeasurePoints([]);
+              if (next) {
+                setRegionZoomMode(false);
+                setZoomSelection(null);
+              }
             }}
             className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
               measureMode
@@ -474,9 +642,18 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
       <div
         ref={containerRef}
         onWheel={handleWheel}
-        className="relative flex-1 w-full h-full overflow-hidden cursor-crosshair bg-[#060a12]"
+        className={`relative flex-1 w-full h-full overflow-hidden bg-[#060a12] ${
+          regionZoomMode
+            ? 'cursor-zoom-in'
+            : measureMode
+            ? 'cursor-crosshair'
+            : isPanning
+            ? 'cursor-grabbing'
+            : 'cursor-grab'
+        }`}
       >
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
           className="w-full h-full block"
           onMouseDown={handleMouseDown}
@@ -573,6 +750,40 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                         </g>
                       );
                     })}
+
+                    {/* Wafer Orientation Markers (Frontside +Z / Backside -Z) */}
+                    <text
+                      x={paddingX}
+                      y={toScreen(0, rawMaxY).y - 10}
+                      fill={
+                        activeStepSide === 'front' || !activeStepSide
+                          ? '#38bdf8'
+                          : activeStepSide === 'both'
+                          ? '#34d399'
+                          : '#64748b'
+                      }
+                      fontSize="9.5"
+                      fontWeight="600"
+                      fontFamily="JetBrains Mono, monospace"
+                    >
+                      ▲ FRONTSIDE (+Z)
+                    </text>
+                    <text
+                      x={paddingX}
+                      y={datumY + 34}
+                      fill={
+                        activeStepSide === 'back'
+                          ? '#fbbf24'
+                          : activeStepSide === 'both'
+                          ? '#34d399'
+                          : '#64748b'
+                      }
+                      fontSize="9.5"
+                      fontWeight="600"
+                      fontFamily="JetBrains Mono, monospace"
+                    >
+                      ▼ BACKSIDE (-Z)
+                    </text>
                   </>
                 );
               })()}
@@ -617,9 +828,9 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                         strokeDasharray="4 3"
                       />
                       <rect
-                        x={midX - 55}
+                        x={midX - 72}
                         y={midY - 26}
-                        width="110"
+                        width="144"
                         height="24"
                         rx="5"
                         fill="#0f172a"
@@ -635,10 +846,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                         fontFamily="JetBrains Mono, monospace"
                         textAnchor="middle"
                       >
-                        {dxNm >= 1000
-                          ? `ΔX: ${(dxNm / 1000).toFixed(2)} µm`
-                          : `ΔX: ${Math.round(dxNm)} nm`}{' '}
-                        | ΔY: {Math.round(dyNm)} nm
+                        ΔX: {formatThickness(dxNm, thicknessUnit)} | ΔY: {formatThickness(dyNm, thicknessUnit)}
                       </text>
                     </g>
                   );
@@ -646,6 +854,58 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
               </g>
             )}
           </g>
+
+          {/* Magnifying Glass Region Selection Marquee (Screen / Viewport coordinates) */}
+          {zoomSelection && (() => {
+            const x = Math.min(zoomSelection.startX, zoomSelection.endX);
+            const y = Math.min(zoomSelection.startY, zoomSelection.endY);
+            const w = Math.abs(zoomSelection.endX - zoomSelection.startX);
+            const h = Math.abs(zoomSelection.endY - zoomSelection.startY);
+            const w1 = toWorld((x - pan.x) / zoom, (y - pan.y) / zoom);
+            const w2 = toWorld((x + w - pan.x) / zoom, (y + h - pan.y) / zoom);
+            const dxNm = Math.abs(w2.x - w1.x);
+            const dyNm = Math.abs(w2.y - w1.y);
+            return (
+              <g pointerEvents="none">
+                <rect
+                  x={x}
+                  y={y}
+                  width={w}
+                  height={h}
+                  fill="rgba(56, 189, 248, 0.14)"
+                  stroke="#38bdf8"
+                  strokeWidth="1.5"
+                  strokeDasharray="5 3"
+                  rx="2"
+                />
+                {(w > 24 || h > 24) && (
+                  <g transform={`translate(${Math.min(svgWidth - 140, x)}, ${Math.max(20, y - 6)})`}>
+                    <rect
+                      x="0"
+                      y="-14"
+                      width="136"
+                      height="16"
+                      rx="3"
+                      fill="#0f172a"
+                      fillOpacity="0.92"
+                      stroke="#38bdf8"
+                      strokeWidth="0.8"
+                    />
+                    <text
+                      x="6"
+                      y="-3"
+                      fill="#7dd3fc"
+                      fontSize="9.5"
+                      fontFamily="JetBrains Mono, monospace"
+                      fontWeight="600"
+                    >
+                      {formatThickness(dxNm, thicknessUnit)} × {formatThickness(dyNm, thicknessUnit)}
+                    </text>
+                  </g>
+                )}
+              </g>
+            );
+          })()}
 
           {/* Cleanroom Scale Bar HUD in bottom-left */}
           <g transform={`translate(${paddingX}, ${svgHeight - 20})`}>
@@ -691,14 +951,50 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
           </g>
         </svg>
 
+        {/* Active Magnifying Glass Mode Banner */}
+        {regionZoomMode && (
+          <div className="absolute top-3 left-3 z-10 flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-sky-500/60 text-sky-300 text-[11px] font-medium shadow-lg backdrop-blur-md">
+            <Search className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            <span>Drag rectangle to zoom region · Click to zoom 2× · Preserves geometry aspect ratio</span>
+            <button
+              type="button"
+              onClick={() => {
+                setRegionZoomMode(false);
+                setZoomSelection(null);
+              }}
+              className="ml-1 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px]"
+            >
+              Done
+            </button>
+          </div>
+        )}
+
         {/* FLOATING QUICK-ACTION HUD (Bottom-Right) - Always accessible on canvas */}
         <div className="absolute bottom-3 right-3 z-10 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl rounded-xl p-1 text-xs">
           <button
-            onClick={() => setZoom((z) => Math.max(0.15, z * 0.85))}
+            onClick={() => zoomAroundPoint(zoom * 0.85, svgWidth / 2, svgHeight / 2)}
             className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
             title="Zoom Out (-)"
           >
             <ZoomOut className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => {
+              const next = !regionZoomMode;
+              setRegionZoomMode(next);
+              setZoomSelection(null);
+              if (next) {
+                setMeasureMode(false);
+              }
+            }}
+            className={`p-1.5 rounded-lg transition-colors ${
+              regionZoomMode
+                ? 'bg-sky-500 text-white shadow-sm'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800'
+            }`}
+            title="Magnifying Glass: Drag to zoom selected region"
+          >
+            <Search className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={fitToScreen}
@@ -709,7 +1005,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
             <span>Fit</span>
           </button>
           <button
-            onClick={() => setZoom((z) => Math.min(5.0, z * 1.18))}
+            onClick={() => zoomAroundPoint(zoom * 1.18, svgWidth / 2, svgHeight / 2)}
             className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
             title="Zoom In (+)"
           >
@@ -718,7 +1014,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
         </div>
 
         {/* Hover Layer Inspector Tooltip */}
-        {hoveredPolygon && (
+        {hoveredPolygon && !zoomSelection && (
           <div
             className="absolute pointer-events-none z-20 px-3 py-2 rounded-xl bg-slate-900/95 border border-sky-500/50 text-white shadow-2xl backdrop-blur-md"
             style={{
@@ -740,7 +1036,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                   </div>
                   <div className="text-[11px] text-slate-300 font-mono flex items-center gap-2">
                     <span>
-                      Thickness: {heightNm >= 1000 ? `${(heightNm / 1000).toFixed(2)} µm` : `${heightNm} nm`}
+                      Thickness: {formatThickness(heightNm, thicknessUnit)}
                     </span>
                     <span className="text-slate-500">|</span>
                     <span className="text-slate-400 capitalize">{mat.category}</span>

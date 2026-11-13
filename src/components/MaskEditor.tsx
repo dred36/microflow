@@ -5,7 +5,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { MaskWindow, ProcessStep } from '../types/microfab';
-import { Plus, Trash2, ArrowLeftRight, MoveHorizontal, GripVertical, Scan } from 'lucide-react';
+import { Plus, Trash2, ArrowLeftRight, MoveHorizontal, GripVertical, Scan, Edit2, Check } from 'lucide-react';
 
 interface MaskEditorProps {
   step: ProcessStep;
@@ -34,6 +34,29 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const [isEditingMaskName, setIsEditingMaskName] = useState<boolean>(false);
+  const [editingMaskName, setEditingMaskName] = useState<string>(litho.maskName || '');
+
+  useEffect(() => {
+    setIsEditingMaskName(false);
+    setEditingMaskName(step.lithography?.maskName || '');
+  }, [step.id, step.lithography?.maskName]);
+
+  const handleSaveMaskName = () => {
+    const trimmed = editingMaskName.trim();
+    if (trimmed && trimmed !== litho.maskName) {
+      onUpdateStep({
+        ...step,
+        lithography: {
+          ...litho,
+          maskName: trimmed,
+        },
+      });
+    } else {
+      setEditingMaskName(litho.maskName || '');
+    }
+    setIsEditingMaskName(false);
+  };
 
   const windows = litho.windows || [];
 
@@ -198,10 +221,61 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
           <span className="text-xs font-semibold tracking-wider uppercase text-sky-400">
             Photomask Aperture Track
           </span>
+          {step.side === 'back' && (
+            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-semibold">
+              Backside
+            </span>
+          )}
+          {step.side === 'both' && (
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[10px] font-semibold">
+              Both Sides
+            </span>
+          )}
           <span className="text-xs text-slate-500">·</span>
-          <span className="text-xs text-slate-400 font-mono">
-            {litho.maskName || 'Photomask Layer'}
-          </span>
+          {isEditingMaskName ? (
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                autoFocus
+                value={editingMaskName}
+                onChange={(e) => setEditingMaskName(e.target.value)}
+                onBlur={handleSaveMaskName}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSaveMaskName();
+                  if (e.key === 'Escape') {
+                    setEditingMaskName(litho.maskName || '');
+                    setIsEditingMaskName(false);
+                  }
+                }}
+                placeholder="Mask name..."
+                className="px-2 py-0.5 rounded bg-slate-950 border border-sky-500 text-xs text-white font-mono focus:outline-none w-44"
+              />
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  handleSaveMaskName();
+                }}
+                className="p-0.5 text-emerald-400 hover:text-emerald-300"
+                title="Save Mask Name"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingMaskName(litho.maskName || 'Photomask Layer');
+                setIsEditingMaskName(true);
+              }}
+              className="group/maskname flex items-center gap-1.5 text-xs text-slate-300 hover:text-white font-mono px-1.5 py-0.5 rounded hover:bg-slate-800/80 border border-transparent hover:border-slate-700 transition-colors"
+              title="Click to rename assigned mask"
+            >
+              <span>{litho.maskName || 'Photomask Layer'}</span>
+              <Edit2 className="w-3 h-3 text-slate-500 group-hover/maskname:text-sky-400 transition-colors" />
+            </button>
+          )}
           <span className="text-xs text-slate-500">·</span>
           <span className="text-[11px] text-slate-400">
             Drag center to move · Drag left/right borders to resize

@@ -5,19 +5,19 @@
 
 import React, { useState, useEffect } from 'react';
 import { ProcessFlow } from '../types/microfab';
+import { ThicknessUnit } from '../lib/units';
 import {
   Layers,
   Play,
   Pause,
   SkipBack,
   SkipForward,
+  ChevronLeft,
+  ChevronRight,
   FolderOpen,
-  Save,
   Download,
   Upload,
-  BookOpen,
   LayoutGrid,
-  Sparkles,
   FileText,
   Sliders,
   PanelLeft,
@@ -29,6 +29,10 @@ interface HeaderProps {
   flow: ProcessFlow;
   activeStepIndex: number;
   isPlaying: boolean;
+  playSpeed: number;
+  onChangePlaySpeed: (speed: number) => void;
+  thicknessUnit: ThicknessUnit;
+  onChangeThicknessUnit: (unit: ThicknessUnit) => void;
   onTogglePlay: () => void;
   onStepChange: (index: number) => void;
   onUpdateTitle: (title: string) => void;
@@ -49,6 +53,10 @@ export const Header: React.FC<HeaderProps> = ({
   flow,
   activeStepIndex,
   isPlaying,
+  playSpeed,
+  onChangePlaySpeed,
+  thicknessUnit,
+  onChangeThicknessUnit,
   onTogglePlay,
   onStepChange,
   onUpdateTitle,
@@ -164,14 +172,23 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Step Playback Controller */}
-      <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1 text-xs">
+      <div className="flex items-center gap-1.5 bg-slate-950/80 border border-slate-800 rounded-xl px-2.5 py-1 text-xs">
+        <button
+          disabled={flow.steps.length === 0 || activeStepIndex === 0}
+          onClick={() => onStepChange(flow.steps.length > 0 ? 0 : -1)}
+          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 transition-colors"
+          title="First Process Step (Step 1)"
+        >
+          <SkipBack className="w-3.5 h-3.5" />
+        </button>
+
         <button
           disabled={activeStepIndex <= -1}
           onClick={() => onStepChange(activeStepIndex - 1)}
-          className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-30 transition-colors"
+          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 transition-colors"
           title="Previous Step"
         >
-          <SkipBack className="w-3.5 h-3.5" />
+          <ChevronLeft className="w-3.5 h-3.5" />
         </button>
 
         <button
@@ -199,23 +216,86 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           disabled={activeStepIndex >= flow.steps.length - 1}
           onClick={() => onStepChange(activeStepIndex + 1)}
-          className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-30 transition-colors"
+          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 transition-colors"
           title="Next Step"
+        >
+          <ChevronRight className="w-3.5 h-3.5" />
+        </button>
+
+        <button
+          disabled={flow.steps.length === 0 || activeStepIndex >= flow.steps.length - 1}
+          onClick={() => onStepChange(flow.steps.length - 1)}
+          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 transition-colors"
+          title={`Last Process Step (Step ${flow.steps.length})`}
         >
           <SkipForward className="w-3.5 h-3.5" />
         </button>
 
         <span className="text-slate-700">|</span>
 
-        <span className="font-mono text-slate-300 text-[11px]">
+        {/* Playback Speed Selector */}
+        <div
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300"
+          title="Playback Speed"
+        >
+          <span className="text-[10px] text-slate-500 font-mono">Speed</span>
+          <select
+            value={playSpeed}
+            onChange={(e) => onChangePlaySpeed(parseFloat(e.target.value))}
+            aria-label="Playback Speed"
+            className="bg-transparent text-sky-400 font-mono font-semibold text-[11px] focus:outline-none cursor-pointer"
+          >
+            <option value="0.5" className="bg-slate-900 text-slate-200">0.5×</option>
+            <option value="1" className="bg-slate-900 text-slate-200">1×</option>
+            <option value="1.5" className="bg-slate-900 text-slate-200">1.5×</option>
+            <option value="2" className="bg-slate-900 text-slate-200">2×</option>
+            <option value="3" className="bg-slate-900 text-slate-200">3×</option>
+            <option value="5" className="bg-slate-900 text-slate-200">5×</option>
+          </select>
+        </div>
+
+        <span className="text-slate-700">|</span>
+
+        <span className="font-mono text-slate-300 text-[11px] whitespace-nowrap">
           {activeStepIndex === -1
-            ? `Substrate (Step 0 / ${flow.steps.length})`
-            : `Step ${activeStepIndex + 1} / ${flow.steps.length}`}
+            ? `Substrate (0/${flow.steps.length})`
+            : `Step ${activeStepIndex + 1}/${flow.steps.length}`}
         </span>
       </div>
 
       {/* Primary Actions & Modals */}
       <div className="flex items-center gap-2">
+        {/* Base Thickness Unit Switcher */}
+        <div
+          className="flex items-center bg-slate-950/90 border border-slate-700/80 rounded-lg p-0.5 text-[11px]"
+          title="Base Unit for Thicknesses (nm or µm)"
+        >
+          <span className="px-1.5 text-[10px] text-slate-400 font-mono hidden xl:inline">
+            Unit:
+          </span>
+          <button
+            type="button"
+            onClick={() => onChangeThicknessUnit('nm')}
+            className={`px-2 py-1 rounded-md font-mono font-semibold transition-colors ${
+              thicknessUnit === 'nm'
+                ? 'bg-sky-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            nm
+          </button>
+          <button
+            type="button"
+            onClick={() => onChangeThicknessUnit('um')}
+            className={`px-2 py-1 rounded-md font-mono font-semibold transition-colors ${
+              thicknessUnit === 'um'
+                ? 'bg-sky-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            µm
+          </button>
+        </div>
         <button
           onClick={onOpenPresets}
           className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium transition-colors"

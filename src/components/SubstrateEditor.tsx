@@ -6,6 +6,8 @@
 import React from 'react';
 import { ProcessFlow, SubstrateLayer, Material } from '../types/microfab';
 import { getMaterialById } from '../lib/materials';
+import { ThicknessUnit, formatThickness, getUnitLabel } from '../lib/units';
+import { ThicknessInput } from './ThicknessInput';
 import {
   Layers,
   Plus,
@@ -21,6 +23,7 @@ import {
 
 interface SubstrateEditorProps {
   flow: ProcessFlow;
+  thicknessUnit?: ThicknessUnit;
   onUpdateFlow: (updated: ProcessFlow) => void;
   onOpenMaterialsModal: () => void;
 }
@@ -135,6 +138,7 @@ export const SUBSTRATE_PRESETS: {
 
 export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
   flow,
+  thicknessUnit = 'nm',
   onUpdateFlow,
   onOpenMaterialsModal,
 }) => {
@@ -233,7 +237,7 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
           </div>
 
           <div className="text-xs font-mono text-sky-400 font-semibold">
-            {(totalThickness / 1000).toFixed(2)} µm total
+            {formatThickness(totalThickness, thicknessUnit)} total
           </div>
         </div>
 
@@ -319,9 +323,7 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
                     </span>
                   </div>
                   <span className="font-mono text-[10px] font-bold text-slate-950 ml-2 whitespace-nowrap">
-                    {layer.thickness >= 1000
-                      ? `${(layer.thickness / 1000).toFixed(2)} µm`
-                      : `${layer.thickness} nm`}
+                    {formatThickness(layer.thickness, thicknessUnit)}
                   </span>
                 </div>
               );
@@ -446,21 +448,21 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
 
                   <div>
                     <div className="flex justify-between text-[10px] text-slate-400 mb-0.5">
-                      <span>Thickness (nm)</span>
+                      <span>Thickness ({getUnitLabel(thicknessUnit)})</span>
                       <span className="font-mono text-sky-400">
-                        {(layer.thickness / 1000).toFixed(2)} µm
+                        {formatThickness(layer.thickness, thicknessUnit === 'nm' ? 'um' : 'nm')}
                       </span>
                     </div>
-                    <input
-                      type="number"
-                      min="5"
-                      step="50"
-                      value={layer.thickness}
-                      onChange={(e) =>
+                    <ThicknessInput
+                      valueNm={layer.thickness}
+                      onChangeNm={(valNm) =>
                         handleUpdateLayer(actualIdx, {
-                          thickness: Math.max(5, parseFloat(e.target.value || '5')),
+                          thickness: valNm,
                         })
                       }
+                      unit={thicknessUnit}
+                      minNm={5}
+                      stepNm={50}
                       className="w-full px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
                     />
                   </div>

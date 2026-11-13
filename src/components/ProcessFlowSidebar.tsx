@@ -14,10 +14,16 @@ import {
   createBlock,
   updateBlock,
   deleteBlock,
-  assignStepToBlock,
   toggleBlockCollapsed,
+  buildTimelineItems,
+  moveBlockInTimeline,
+  moveStepInTimeline,
+  insertStepIntoTimeline,
+  deleteStepFromTimeline,
+  normalizeFlowBlocksOrder,
   BLOCK_PALETTE,
 } from '../lib/blockUtils';
+import { ThicknessUnit, formatThickness } from '../lib/units';
 import {
   Plus,
   Layers,
@@ -35,16 +41,16 @@ import {
   ChevronRight,
   ChevronDown,
   Sliders,
-  FolderKanban,
   FolderPlus,
   Edit2,
   Check,
-  Folder,
+  Link2,
 } from 'lucide-react';
 
 interface ProcessFlowSidebarProps {
   flow: ProcessFlow;
   activeStepIndex: number;
+  thicknessUnit?: ThicknessUnit;
   onSelectStepIndex: (index: number) => void;
   onUpdateFlow: (updated: ProcessFlow) => void;
   onOpenPresets: () => void;
@@ -53,6 +59,7 @@ interface ProcessFlowSidebarProps {
 export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
   flow,
   activeStepIndex,
+  thicknessUnit = 'nm',
   onSelectStepIndex,
   onUpdateFlow,
   onOpenPresets,
@@ -84,6 +91,8 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
         return <Sparkles className="w-4 h-4 text-emerald-400" />;
       case 'cmp':
         return <Disc className="w-4 h-4 text-cyan-400" />;
+      case 'bonding':
+        return <Link2 className="w-4 h-4 text-indigo-400" />;
       case 'anneal':
         return <Sliders className="w-4 h-4 text-purple-400" />;
       default:
@@ -181,13 +190,37 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
       case 'cmp':
         newStep = {
           id,
-          title: 'CMP Planarization',
+          title: 'Grind / Polish / Planarize',
           type: 'cmp',
           enabled: true,
           blockId: blockId || undefined,
           cmp: {
+            operation: 'cmp',
             mode: 'polish-depth',
             depth: 250,
+          },
+        };
+        break;
+      case 'bonding':
+        newStep = {
+          id,
+          title: 'Wafer Bonding',
+          type: 'bonding',
+          side: 'front',
+          enabled: true,
+          blockId: blockId || undefined,
+          bonding: {
+            sourceType: 'custom-substrate',
+            bondingMethod: 'fusion',
+            incomingFace: 'front',
+            customLayers: [
+              {
+                id: `bond_layer_${Date.now()}`,
+                name: 'Cap Wafer (Silicon <100>)',
+                materialId: 'mat_si_sub',
+                thickness: 2500,
+              },
+            ],
           },
         };
         break;
@@ -210,23 +243,19 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
         };
     }
 
-    const updated = [...flow.steps, newStep];
-    onUpdateFlow({ ...flow, steps: updated });
-    onSelectStepIndex(updated.length - 1);
+    const { flow: newFlow, insertedIndex } = insertStepIntoTimeline(flow, newStep, blockId);
+    onUpdateFlow(newFlow);
+    onSelectStepIndex(insertedIndex);
     setShowAddMenu(false);
     setTargetBlockForNewStep(null);
   };
 
   const handleMoveStep = (idx: number, direction: 'up' | 'down') => {
-    const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (targetIdx < 0 || targetIdx >= flow.steps.length) return;
-
-    const updated = [...flow.steps];
-    const [moved] = updated.splice(idx, 1);
-    updated.splice(targetIdx, 0, moved);
-
-    onUpdateFlow({ ...flow, steps: updated });
-    onSelectStepIndex(targetIdx);
+    const { flow: newFlow, newActiveIndex } = moveStepInTimeline(flow, idx, direction);
+    onUpdateFlow(newFlow);
+    if (newActiveIndex >= 0) {
+      onSelectStepIndex(newActiveIndex);
+    }
   };
 
   const handleDuplicateStep = (idx: number) => {
@@ -238,14 +267,14 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
     };
     const updated = [...flow.steps];
     updated.splice(idx + 1, 0, cloned);
-    onUpdateFlow({ ...flow, steps: updated });
+    onUpdateFlow(normalizeFlowBlocksOrder({ ...flow, steps: updated }));
     onSelectStepIndex(idx + 1);
   };
 
   const handleDeleteStep = (idx: number) => {
     if (flow.steps.length <= 1) return;
-    const updated = flow.steps.filter((_, i) => i !== idx);
-    onUpdateFlow({ ...flow, steps: updated });
+    const newFlow = deleteStepFromTimeline(flow, idx);
+    onUpdateFlow(newFlow);
     onSelectStepIndex(Math.max(0, idx - 1));
   };
 
@@ -273,12 +302,25 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
       const updatedSteps = newFlow.steps.map((step) =>
         !step.blockId ? { ...step, blockId: newBlock.id } : step
       );
-      newFlow = { ...newFlow, steps: updatedSteps };
+      newFlow = normalizeFlowBlocksOrder({ ...newFlow, steps: updatedSteps });
     }
 
     onUpdateFlow(newFlow);
     setIsCreatingBlock(false);
     setNewBlockName('');
+  };
+
+  const handleMoveBlock = (blockId: string, direction: 'up' | 'down', e: React.MouseEvent) => {
+    e.stopPropagation();
+    const activeStepId = activeStepIndex >= 0 ? flow.steps[activeStepIndex]?.id : null;
+    const newFlow = moveBlockInTimeline(flow, blockId, direction);
+    onUpdateFlow(newFlow);
+    if (activeStepId) {
+      const nextActiveIdx = newFlow.steps.findIndex((s) => s.id === activeStepId);
+      if (nextActiveIdx >= 0 && nextActiveIdx !== activeStepIndex) {
+        onSelectStepIndex(nextActiveIdx);
+      }
+    }
   };
 
   const handleCancelCreateBlock = () => {
@@ -359,23 +401,48 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
 
           {/* Step info */}
           <div className="min-w-0 flex-1 truncate">
-            <div className="font-medium truncate">{step.title}</div>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="font-medium truncate">{step.title}</span>
+              {step.side === 'back' && (
+                <span className="px-1 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono text-[9px] font-bold shrink-0">
+                  BACK
+                </span>
+              )}
+              {step.side === 'both' && (
+                <span className="px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[9px] font-bold shrink-0">
+                  BOTH
+                </span>
+              )}
+            </div>
             <div className="text-[10px] text-slate-400 truncate font-mono">
               {step.type === 'deposition' &&
-                `${step.deposition?.method || 'CVD'} · ${
-                  step.deposition?.thickness || step.thickness || 200
-                } nm`}
+                `${step.deposition?.method || 'CVD'} · ${formatThickness(
+                  step.deposition?.thickness || step.thickness || 200,
+                  thicknessUnit
+                )}`}
               {step.type === 'lithography' &&
                 `${step.lithography?.polarity || 'pos'} · ${
                   step.lithography?.maskName || `${step.lithography?.windows.length || 0} slits`
                 }`}
               {step.type === 'etch' &&
-                `${step.etch?.etchType?.toUpperCase() || 'RIE'} · ${
-                  step.etch?.depth || step.thickness || 200
-                } nm`}
+                `${step.etch?.etchType?.toUpperCase() || 'RIE'} · ${formatThickness(
+                  step.etch?.depth || step.thickness || 200,
+                  thicknessUnit
+                )}${
+                  step.etch?.ardeEnabled &&
+                  ['rie', 'drie-bosch', 'ion-beam', 'ashing'].includes(step.etch?.etchType || 'rie')
+                    ? ' · ARDE'
+                    : ''
+                }`}
               {step.type === 'strip' && `${step.strip?.stripType || 'Resist Strip'}`}
               {step.type === 'liftoff' && 'Metal Lift-off'}
-              {step.type === 'cmp' && 'CMP Planarization'}
+              {step.type === 'cmp' && 'Grind/Polish/Planarize'}
+              {step.type === 'bonding' &&
+                `Bond (${step.bonding?.bondingMethod || 'fusion'}) · ${
+                  step.bonding?.sourceType === 'imported-flow'
+                    ? step.bonding?.importedFlowTitle || 'Imported Flow'
+                    : `${step.bonding?.customLayers?.length || 1}L Custom`
+                }`}
               {step.type === 'anneal' && 'Thermal Anneal'}
             </div>
           </div>
@@ -400,18 +467,26 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
             )}
           </button>
           <button
-            disabled={globalIdx === 0}
+            disabled={globalIdx === 0 && !step.blockId}
             onClick={() => handleMoveStep(globalIdx, 'up')}
             className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-slate-200 disabled:opacity-20 transition-colors"
-            title="Move Step Up"
+            title={
+              step.blockId && (globalIdx === 0 || flow.steps[globalIdx - 1]?.blockId !== step.blockId)
+                ? 'Move Up (Remove from block & place before block)'
+                : 'Move Step Up'
+            }
           >
             <ArrowUp className="w-3.5 h-3.5" />
           </button>
           <button
-            disabled={globalIdx === flow.steps.length - 1}
+            disabled={globalIdx === flow.steps.length - 1 && !step.blockId}
             onClick={() => handleMoveStep(globalIdx, 'down')}
             className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-slate-200 disabled:opacity-20 transition-colors"
-            title="Move Step Down"
+            title={
+              step.blockId && (globalIdx === flow.steps.length - 1 || flow.steps[globalIdx + 1]?.blockId !== step.blockId)
+                ? 'Move Down (Remove from block & place after block)'
+                : 'Move Step Down'
+            }
           >
             <ArrowDown className="w-3.5 h-3.5" />
           </button>
@@ -494,7 +569,7 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
             </div>
 
             <span className="text-[10px] font-mono text-emerald-400 font-semibold">
-              {(totalSubThickness / 1000).toFixed(2)} µm
+              {formatThickness(totalSubThickness, thicknessUnit)}
             </span>
           </div>
 
@@ -520,7 +595,7 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
                     width: `${widthPct}%`,
                   }}
                   className="h-full border-r border-black/30 last:border-r-0"
-                  title={`${l.name || mat?.name || 'Layer'}: ${l.thickness} nm`}
+                  title={`${l.name || mat?.name || 'Layer'}: ${formatThickness(l.thickness, thicknessUnit)}`}
                 />
               );
             })}
@@ -616,170 +691,158 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
           </div>
         )}
 
-        {blocks.length > 0 ? (
-          <>
-            {/* Render Each Fabrication Block */}
-            {blocks.map((block) => {
-              const blockStepsWithIndex = flow.steps
-                .map((step, idx) => ({ step, idx }))
-                .filter(({ step }) => step.blockId === block.id);
+        {(() => {
+          const timelineItems = buildTimelineItems(flow);
+          if (timelineItems.length === 0) {
+            return null;
+          }
 
-              const isEditing = editingBlockId === block.id;
+          return timelineItems.map((item, timelineIdx) => {
+            if (item.kind === 'step') {
+              return renderStepItem(item.step, item.idx);
+            }
 
-              return (
+            const { block, steps: blockStepsWithIndex } = item;
+            const isEditing = editingBlockId === block.id;
+
+            return (
+              <div
+                key={block.id}
+                className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden shadow-sm"
+              >
+                {/* Block Header */}
                 <div
-                  key={block.id}
-                  className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden shadow-sm"
+                  onClick={() => handleToggleBlock(block.id)}
+                  className="flex items-center justify-between px-2.5 py-2 bg-slate-900/90 hover:bg-slate-850 cursor-pointer border-b border-slate-800/80 transition-colors group"
                 >
-                  {/* Block Header */}
-                  <div
-                    onClick={() => handleToggleBlock(block.id)}
-                    className="flex items-center justify-between px-2.5 py-2 bg-slate-900/90 hover:bg-slate-850 cursor-pointer border-b border-slate-800/80 transition-colors group"
-                  >
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleToggleBlock(block.id);
-                        }}
-                        className="p-0.5 text-slate-400 hover:text-white"
-                      >
-                        {block.collapsed ? (
-                          <ChevronRight className="w-3.5 h-3.5" />
-                        ) : (
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-
-                      <span
-                        className="w-2.5 h-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: block.color || '#0ea5e9' }}
-                      />
-
-                      {isEditing ? (
-                        <div
-                          className="flex items-center gap-1 flex-1"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input
-                            type="text"
-                            value={editingBlockName}
-                            onChange={(e) => setEditingBlockName(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleSaveBlockName(block.id)}
-                            autoFocus
-                            className="bg-slate-950 border border-sky-500 rounded px-1.5 py-0.5 text-xs text-white flex-1"
-                          />
-                          <button
-                            onClick={() => handleSaveBlockName(block.id)}
-                            className="p-1 text-emerald-400 hover:text-emerald-300"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="font-semibold text-xs text-slate-200 truncate">
-                          {block.name}
-                        </span>
-                      )}
-                    </div>
-
-                    <div
-                      className="flex items-center gap-1 shrink-0 ml-2"
-                      onClick={(e) => e.stopPropagation()}
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleBlock(block.id);
+                      }}
+                      className="p-0.5 text-slate-400 hover:text-white"
                     >
-                      <span className="text-[10px] font-mono text-slate-500">
-                        {blockStepsWithIndex.length} {blockStepsWithIndex.length === 1 ? 'step' : 'steps'}
-                      </span>
+                      {block.collapsed ? (
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      ) : (
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      )}
+                    </button>
 
-                      <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: block.color || '#0ea5e9' }}
+                    />
+
+                    {isEditing ? (
+                      <div
+                        className="flex items-center gap-1 flex-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="text"
+                          value={editingBlockName}
+                          onChange={(e) => setEditingBlockName(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSaveBlockName(block.id)}
+                          autoFocus
+                          className="bg-slate-950 border border-sky-500 rounded px-1.5 py-0.5 text-xs text-white flex-1"
+                        />
                         <button
-                          onClick={() => {
-                            setEditingBlockId(block.id);
-                            setEditingBlockName(block.name);
-                          }}
-                          className="p-1 text-slate-400 hover:text-white"
-                          title="Rename Block"
+                          onClick={() => handleSaveBlockName(block.id)}
+                          className="p-1 text-emerald-400 hover:text-emerald-300"
                         >
-                          <Edit2 className="w-3 h-3" />
+                          <Check className="w-3.5 h-3.5" />
                         </button>
+                      </div>
+                    ) : (
+                      <span className="font-semibold text-xs text-slate-200 truncate">
+                        {block.name}
+                      </span>
+                    )}
+                  </div>
+
+                  <div
+                    className="flex items-center gap-0.5 shrink-0 ml-2"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span className="text-[10px] font-mono text-slate-500 mr-1">
+                      {blockStepsWithIndex.length} {blockStepsWithIndex.length === 1 ? 'step' : 'steps'}
+                    </span>
+
+                    <div className="flex items-center opacity-70 group-hover:opacity-100 transition-opacity">
+                      <button
+                        disabled={timelineIdx === 0}
+                        onClick={(e) => handleMoveBlock(block.id, 'up', e)}
+                        className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-white disabled:opacity-20 transition-colors"
+                        title="Move Block Up"
+                      >
+                        <ArrowUp className="w-3 h-3" />
+                      </button>
+                      <button
+                        disabled={timelineIdx === timelineItems.length - 1}
+                        onClick={(e) => handleMoveBlock(block.id, 'down', e)}
+                        className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-white disabled:opacity-20 transition-colors"
+                        title="Move Block Down"
+                      >
+                        <ArrowDown className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditingBlockId(block.id);
+                          setEditingBlockName(block.name);
+                        }}
+                        className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-white transition-colors"
+                        title="Rename Block"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          setTargetBlockForNewStep(block.id);
+                          setShowAddMenu(true);
+                        }}
+                        className="p-1 rounded hover:bg-slate-700/80 text-sky-400 hover:text-sky-300 transition-colors"
+                        title="Add Step inside this Block"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={(e) => handleDeleteBlock(block.id, e)}
+                        className="p-1 rounded hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 transition-colors"
+                        title="Delete / Ungroup Block"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Block Steps */}
+                {!block.collapsed && (
+                  <div className="p-1.5 space-y-1 bg-slate-950/20">
+                    {blockStepsWithIndex.map(({ step, idx }) => renderStepItem(step, idx))}
+
+                    {blockStepsWithIndex.length === 0 && (
+                      <div className="p-3 text-center text-slate-500 text-[11px] italic">
+                        No operations in this block yet.{' '}
                         <button
                           onClick={() => {
                             setTargetBlockForNewStep(block.id);
                             setShowAddMenu(true);
                           }}
-                          className="p-1 text-sky-400 hover:text-sky-300"
-                          title="Add Step inside this Block"
+                          className="text-sky-400 hover:underline"
                         >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={(e) => handleDeleteBlock(block.id, e)}
-                          className="p-1 text-slate-500 hover:text-rose-400"
-                          title="Delete / Ungroup Block"
-                        >
-                          <Trash2 className="w-3 h-3" />
+                          + Add Step
                         </button>
                       </div>
-                    </div>
+                    )}
                   </div>
-
-                  {/* Block Steps */}
-                  {!block.collapsed && (
-                    <div className="p-1.5 space-y-1 bg-slate-950/20">
-                      {blockStepsWithIndex.map(({ step, idx }) => renderStepItem(step, idx))}
-
-                      {blockStepsWithIndex.length === 0 && (
-                        <div className="p-3 text-center text-slate-500 text-[11px] italic">
-                          No operations in this block yet.{' '}
-                          <button
-                            onClick={() => {
-                              setTargetBlockForNewStep(block.id);
-                              setShowAddMenu(true);
-                            }}
-                            className="text-sky-400 hover:underline"
-                          >
-                            + Add Step
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Ungrouped Operations Section */}
-            {(() => {
-              const ungrouped = flow.steps
-                .map((step, idx) => ({ step, idx }))
-                .filter(({ step }) => !step.blockId);
-
-              if (ungrouped.length === 0) return null;
-
-              return (
-                <div className="rounded-xl border border-slate-800/80 bg-slate-950/30 overflow-hidden">
-                  <div className="px-2.5 py-1.5 bg-slate-900/60 border-b border-slate-800 text-[11px] font-semibold text-slate-400 flex items-center justify-between">
-                    <span>Ungrouped Operations ({ungrouped.length})</span>
-                    <button
-                      onClick={() => handleOpenCreateBlock(true)}
-                      className="text-[10px] text-sky-400 hover:underline"
-                    >
-                      + Group into Block
-                    </button>
-                  </div>
-                  <div className="p-1.5 space-y-1">
-                    {ungrouped.map(({ step, idx }) => renderStepItem(step, idx))}
-                  </div>
-                </div>
-              );
-            })()}
-          </>
-        ) : (
-          /* Flat list if no blocks defined yet */
-          <div className="space-y-1.5">
-            {flow.steps.map((step, idx) => renderStepItem(step, idx))}
-          </div>
-        )}
+                )}
+              </div>
+            );
+          });
+        })()}
       </div>
 
       {/* Add Step Action Button & Popover */}
@@ -865,8 +928,18 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
             >
               <Disc className="w-4 h-4 text-cyan-400" />
               <div>
-                <div className="font-medium">CMP Planarization</div>
-                <div className="text-[10px] text-slate-500">Chemical mechanical polishing</div>
+                <div className="font-medium">Grind/Polish/Planarize</div>
+                <div className="text-[10px] text-slate-500">Wafer grinding, polishing &amp; CMP planarization</div>
+              </div>
+            </button>
+            <button
+              onClick={() => handleAddStep('bonding', targetBlockForNewStep)}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left hover:bg-slate-800 text-slate-200"
+            >
+              <Link2 className="w-4 h-4 text-indigo-400" />
+              <div>
+                <div className="font-medium">Wafer Bonding</div>
+                <div className="text-[10px] text-slate-500">Bond custom substrate or imported pre-processed wafer</div>
               </div>
             </button>
           </div>

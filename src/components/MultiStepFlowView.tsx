@@ -13,16 +13,19 @@ import {
 import { simulateCrossSection, buildRenderPolygons } from '../lib/simulationEngine';
 import { SvgPatterns } from './SvgPatterns';
 import { getMaterialById } from '../lib/materials';
+import { ThicknessUnit, formatThickness } from '../lib/units';
 import { Download, LayoutGrid, Check, FileDown, Eye, Sliders } from 'lucide-react';
 
 interface MultiStepFlowViewProps {
   flow: ProcessFlow;
+  thicknessUnit?: ThicknessUnit;
   onSelectStepIndex: (idx: number) => void;
   onClose: () => void;
 }
 
 export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
   flow,
+  thicknessUnit = 'nm',
   onSelectStepIndex,
   onClose,
 }) => {
@@ -46,6 +49,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
         id: string;
         title: string;
         type: any;
+        side?: 'front' | 'back' | 'both';
         notes?: string;
         thickness?: number;
         deposition?: any;
@@ -53,6 +57,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
         etch?: any;
         strip?: any;
         cmp?: any;
+        bonding?: any;
       };
       idx: number;
       mesh: CrossSectionMesh;
@@ -76,7 +81,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
       const subMesh = simulateCrossSection(flow, -1);
       const subPolys = buildRenderPolygons(subMesh, flow.materials);
       const subDesc = subLayers
-        .map((l) => `${l.name || l.materialId} (${l.thickness} nm)`)
+        .map((l) => `${l.name || l.materialId} (${formatThickness(l.thickness, thicknessUnit)})`)
         .join(' · ');
       list.push({
         step: {
@@ -338,7 +343,11 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
               const { mesh, polygons, step } = item;
               const subW = flow.substrateWidth || 10000;
               const scaleX = (cellWidth - padX * 2) / subW;
-              const scaleY = ((cellHeight - padY * 2) * 0.6) / 3500;
+              const maxMeshSpan = Math.max(
+                3500,
+                ...stepMeshes.map((m) => Math.max(1000, m.mesh.maxY - m.mesh.minY))
+              );
+              const scaleY = ((cellHeight - padY * 2) * 0.6) / maxMeshSpan;
 
               const toScreenLocal = (x: number, y: number) => {
                 const sx = padX + x * scaleX;
@@ -389,22 +398,44 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
                       fontFamily="JetBrains Mono, monospace"
                     >
                       {item.customSubtitle ||
-                        (step.type === 'deposition' &&
-                          `${step.deposition?.method || 'CVD'} · ${
-                            step.deposition?.thickness || step.thickness || 200
-                          } nm`) ||
-                        (step.type === 'lithography' &&
-                          `Photolithography · ${step.lithography?.polarity} tone${
-                            item.reticleName ? ` · Reticle: ${item.reticleName}` : ''
-                          }`) ||
-                        (step.type === 'etch' &&
-                          `Etch: ${step.etch?.etchType?.toUpperCase()} · depth ${
-                            step.etch?.depth || step.thickness || 200
-                          } nm`) ||
-                        (step.type === 'strip' &&
-                          `${step.strip?.stripType} · ${step.strip?.solvent || 'solvent'}`) ||
-                        (step.type === 'liftoff' && 'Metal Lift-off') ||
-                        (step.type === 'cmp' && 'CMP Planarization')}
+                        `${
+                          step.side === 'back'
+                            ? '[Backside] '
+                            : step.side === 'both'
+                            ? '[Both Sides] '
+                            : ''
+                        }${
+                          (step.type === 'deposition' &&
+                            `${step.deposition?.method || 'CVD'} · ${formatThickness(
+                              step.deposition?.thickness || step.thickness || 200,
+                              thicknessUnit
+                            )}`) ||
+                          (step.type === 'lithography' &&
+                            `Photolithography · ${step.lithography?.polarity} tone${
+                              item.reticleName ? ` · Reticle: ${item.reticleName}` : ''
+                            }`) ||
+                          (step.type === 'etch' &&
+                            `Etch: ${step.etch?.etchType?.toUpperCase()} · depth ${formatThickness(
+                              step.etch?.depth || step.thickness || 200,
+                              thicknessUnit
+                            )}${
+                              step.etch?.ardeEnabled &&
+                              ['rie', 'drie-bosch', 'ion-beam', 'ashing'].includes(step.etch?.etchType || 'rie')
+                                ? ' · ARDE'
+                                : ''
+                            }`) ||
+                          (step.type === 'strip' &&
+                            `${step.strip?.stripType} · ${step.strip?.solvent || 'solvent'}`) ||
+                          (step.type === 'liftoff' && 'Metal Lift-off') ||
+                          (step.type === 'cmp' && 'Grind/Polish/Planarize') ||
+                          (step.type === 'bonding' &&
+                            `Wafer Bonding (${step.bonding?.bondingMethod || 'fusion'}) · ${
+                              step.bonding?.sourceType === 'imported-flow'
+                                ? step.bonding?.importedFlowTitle || 'Imported Wafer'
+                                : 'Custom Substrate'
+                            }`) ||
+                          step.type
+                        }`}
                     </text>
                   )}
 

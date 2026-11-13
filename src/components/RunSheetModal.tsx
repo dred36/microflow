@@ -5,14 +5,20 @@
 
 import React, { useState } from 'react';
 import { ProcessFlow } from '../types/microfab';
+import { ThicknessUnit, formatThickness } from '../lib/units';
 import { X, Copy, Check, Printer, FileText } from 'lucide-react';
 
 interface RunSheetModalProps {
   flow: ProcessFlow;
+  thicknessUnit?: ThicknessUnit;
   onClose: () => void;
 }
 
-export const RunSheetModal: React.FC<RunSheetModalProps> = ({ flow, onClose }) => {
+export const RunSheetModal: React.FC<RunSheetModalProps> = ({
+  flow,
+  thicknessUnit = 'nm',
+  onClose,
+}) => {
   const [copied, setCopied] = useState<boolean>(false);
 
   const generateMarkdown = () => {
@@ -26,12 +32,12 @@ export const RunSheetModal: React.FC<RunSheetModalProps> = ({ flow, onClose }) =
     ];
     const totalSubThick = subLayers.reduce((acc, l) => acc + (l.thickness || 0), 0);
     const subDesc = subLayers
-      .map((l) => `${l.name || l.materialId} (${l.thickness} nm)`)
+      .map((l) => `${l.name || l.materialId} (${formatThickness(l.thickness, thicknessUnit)})`)
       .join(' / ');
 
     let md = `# Cleanroom Process Traveller: ${flow.title}\n\n`;
     md += `**Description**: ${flow.description}\n`;
-    md += `**Starting Substrate**: ${subDesc} · Total: ${(totalSubThick / 1000).toFixed(2)} µm · Width: ${(flow.substrateWidth / 1000).toFixed(1)} µm\n\n`;
+    md += `**Starting Substrate**: ${subDesc} · Total: ${formatThickness(totalSubThick, thicknessUnit)} · Width: ${(flow.substrateWidth / 1000).toFixed(1)} µm\n\n`;
     md += `| Step | Process Operation | Tool / Equipment | Recipe & Parameters | Target / Metrology |\n`;
     md += `|---|---|---|---|---|\n`;
     md += `| 0 | Starting Substrate Stack | Substrate Preparation | Multi-layer stack: ${subDesc} | Cleanliness & layer thickness verification |\n`;
@@ -48,7 +54,9 @@ export const RunSheetModal: React.FC<RunSheetModalProps> = ({ flow, onClose }) =
         .filter(Boolean)
         .join(', ');
 
-      md += `| ${idx + 1} | ${step.title} | ${r?.toolName || 'Standard Cleanroom Bench'} | ${params || 'Standard Recipe'} | ${r?.inspectionNotes || step.notes || 'Visual microscope inspection'} |\n`;
+      const sideLabel =
+        step.side === 'back' ? 'Backside' : step.side === 'both' ? 'Both Sides' : 'Frontside';
+      md += `| ${idx + 1} | ${step.title} (${sideLabel}) | ${r?.toolName || 'Standard Cleanroom Bench'} | ${params || 'Standard Recipe'} | ${r?.inspectionNotes || step.notes || 'Visual microscope inspection'} |\n`;
     });
 
     return md;
@@ -137,7 +145,7 @@ export const RunSheetModal: React.FC<RunSheetModalProps> = ({ flow, onClose }) =
             <div>
               <span className="text-[11px] text-slate-400 block">Starting Substrate Stack</span>
               <span className="font-mono text-emerald-400 font-semibold block">
-                {subLayers.length} {subLayers.length === 1 ? 'Layer' : 'Layers'} · {(totalSubThickness / 1000).toFixed(2)} µm
+                {subLayers.length} {subLayers.length === 1 ? 'Layer' : 'Layers'} · {formatThickness(totalSubThickness, thicknessUnit)}
               </span>
               <span className="text-[10px] text-slate-400 font-mono truncate block">
                 {subLayers.map((l) => l.name || l.materialId).join(' / ')}
@@ -178,7 +186,29 @@ export const RunSheetModal: React.FC<RunSheetModalProps> = ({ flow, onClose }) =
                       <td className="py-3 px-3">
                         <div className="font-semibold text-slate-100">{step.title}</div>
                         <div className="text-[10px] text-slate-400 uppercase tracking-wide flex items-center gap-1.5 flex-wrap">
-                          <span>{step.type}</span>
+                          <span>
+                            {step.type === 'cmp'
+                              ? 'Grind/Polish/Planarize'
+                              : step.type === 'bonding'
+                              ? 'Wafer Bonding'
+                              : step.type}
+                          </span>
+                          <span>·</span>
+                          <span
+                            className={
+                              step.side === 'back'
+                                ? 'text-amber-400 font-semibold'
+                                : step.side === 'both'
+                                ? 'text-emerald-400 font-semibold'
+                                : 'text-slate-400'
+                            }
+                          >
+                            {step.side === 'back'
+                              ? 'Backside'
+                              : step.side === 'both'
+                              ? 'Both Sides'
+                              : 'Frontside'}
+                          </span>
                           {step.blockId && (() => {
                             const blk = flow.blocks?.find((b) => b.id === step.blockId);
                             return blk ? (
@@ -192,6 +222,16 @@ export const RunSheetModal: React.FC<RunSheetModalProps> = ({ flow, onClose }) =
                             <>
                               <span>·</span>
                               <span className="text-amber-400/90 font-medium">Reticle: {step.lithography.maskName}</span>
+                            </>
+                          )}
+                          {step.type === 'bonding' && step.bonding && (
+                            <>
+                              <span>·</span>
+                              <span className="text-indigo-400/90 font-medium">
+                                {step.bonding.sourceType === 'imported-flow'
+                                  ? step.bonding.importedFlowTitle || step.bonding.importedFlow?.title || 'Imported Flow'
+                                  : 'Custom Substrate'}
+                              </span>
                             </>
                           )}
                         </div>
