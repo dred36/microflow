@@ -184,6 +184,67 @@ export interface SubstrateLayer {
   thickness: number; // in nm
 }
 
+export interface GdsPoint {
+  x: number; // nm
+  y: number; // nm
+}
+
+export interface GdsShape {
+  id: string;
+  type: 'rect' | 'polygon' | 'path' | 'circle';
+  layer: number;
+  datatype?: number;
+  // rect
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  // polygon & path
+  points?: GdsPoint[];
+  pathWidth?: number; // nm
+  // circle
+  cx?: number;
+  cy?: number;
+  radius?: number;
+}
+
+export interface GdsLayerInfo {
+  layer: number;
+  datatype: number;
+  name: string;
+  color: string;
+  visible: boolean;
+  assignedMaskId?: string;
+}
+
+export interface GdsSectionLine {
+  id: string;
+  label: string;
+  x1: number; // nm (start X, kept synced with points[0].x)
+  y1: number; // nm (start Y, kept synced with points[0].y)
+  x2: number; // nm (end X, kept synced with points[last].x)
+  y2: number; // nm (end Y, kept synced with points[last].y)
+  points?: GdsPoint[]; // Optional multi-point polyline vertices (>= 2 points)
+  color?: string;
+  resizeWaferToCut?: boolean;
+}
+
+export interface GdsConcatConfig {
+  enabled: boolean;
+  sectionIds: string[]; // Ordered list of section cut IDs to concatenate
+  gapNm: number; // Separation space between adjacent cuts in nm
+}
+
+export interface GdsLayoutData {
+  name?: string;
+  layers: GdsLayerInfo[];
+  shapes: GdsShape[];
+  sectionLine?: GdsSectionLine; // Legacy single section line (kept synced to active cut)
+  sectionLines?: GdsSectionLine[]; // Multiple section lines (A-A', B-B', C-C', ...)
+  activeSectionId?: string;
+  concat?: GdsConcatConfig;
+}
+
 export interface ProcessFlow {
   id: string;
   title: string;
@@ -196,6 +257,7 @@ export interface ProcessFlow {
   materials: Material[];
   masks?: PhotomaskLevel[]; // Central mask set library
   blocks?: ProcessBlock[]; // Fabrication blocks / modules hierarchy
+  gdsLayout?: GdsLayoutData; // Optional 2D GDS-style layout & section cut line
 }
 
 /**

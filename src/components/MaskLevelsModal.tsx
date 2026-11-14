@@ -34,7 +34,9 @@ import {
   Eye,
   AlertTriangle,
   ArrowRight,
+  LayoutGrid,
 } from 'lucide-react';
+import { GdsLayoutEditor } from './GdsLayoutEditor';
 
 interface MaskLevelsModalProps {
   flow: ProcessFlow;
@@ -101,6 +103,18 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
   }
   const [conflictPrompt, setConflictPrompt] = useState<ConflictPromptData | null>(null);
   const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; type: 'success' | 'warn' } | null>(null);
+  const [editorTab, setEditorTab] = useState<'apertures' | 'gds'>('apertures');
+  const notifyTimerRef = useRef<number | null>(null);
+
+  const handleEditorNotify = (message: string, type: 'success' | 'warn') => {
+    setFeedbackNotice({ message, type });
+    if (notifyTimerRef.current) {
+      window.clearTimeout(notifyTimerRef.current);
+    }
+    notifyTimerRef.current = window.setTimeout(() => {
+      setFeedbackNotice(null);
+    }, 4000);
+  };
 
   // Drag state for interactive aperture track
   const trackRef = useRef<HTMLDivElement>(null);
@@ -465,9 +479,13 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-md">
-      <div className="relative flex flex-col w-full max-w-6xl h-[92vh] max-h-[850px] bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 animate-in fade-in zoom-in-95 duration-150">
+      <div
+        className={`relative flex flex-col w-full bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 animate-in fade-in zoom-in-95 duration-150 ${
+          editorTab === 'gds' ? 'max-w-7xl h-[94vh] max-h-[900px]' : 'max-w-6xl h-[92vh] max-h-[850px]'
+        }`}
+      >
         {/* Top Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 bg-slate-900 border-b border-slate-800 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 bg-slate-900 border-b border-slate-800 shrink-0">
           <div className="flex items-center gap-3">
             <span className="w-8 h-8 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-sky-950/50">
               <Scan className="w-4 h-4" />
@@ -482,12 +500,40 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Manage reticle set hierarchy, configure aperture geometries, and assign masks to photolithography steps.
+                Manage reticle hierarchy, draw or import 2D GDS layouts, slice section lines, and configure 1D mask apertures.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
+            {/* Workspace Mode Switcher */}
+            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setEditorTab('apertures')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-medium transition-colors ${
+                  editorTab === 'apertures'
+                    ? 'bg-sky-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>1D Aperture Track</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditorTab('gds')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-medium transition-colors ${
+                  editorTab === 'gds'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span>2D GDS Layout &amp; Cut</span>
+              </button>
+            </div>
+
             <button
               onClick={handleCreateNewMask}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-md shadow-sky-900/30 transition-all active:scale-95"
@@ -647,8 +693,17 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
             </div>
           </div>
 
-          {/* RIGHT MAIN PANEL: Active Mask CAD Inspector */}
-          {selectedMask ? (
+          {/* RIGHT MAIN PANEL: Active Mask CAD Inspector or 2D GDS Layout Editor */}
+          {editorTab === 'gds' ? (
+            <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-slate-950 overflow-hidden">
+              <GdsLayoutEditor
+                flow={flow}
+                selectedMask={selectedMask}
+                onUpdateFlow={onUpdateFlow}
+                onNotify={handleEditorNotify}
+              />
+            </div>
+          ) : selectedMask ? (
             <div className="flex-1 flex flex-col overflow-y-auto bg-slate-950 p-4 sm:p-6 space-y-5">
               {/* Mask General Configuration Card */}
               <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-4">
