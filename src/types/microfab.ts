@@ -189,11 +189,14 @@ export interface GdsPoint {
   y: number; // nm
 }
 
+export type GdsPatternType = PatternType | 'outline';
+
 export interface GdsShape {
   id: string;
   type: 'rect' | 'polygon' | 'path' | 'circle';
   layer: number;
   datatype?: number;
+  pattern?: GdsPatternType;
   // rect
   x?: number;
   y?: number;
@@ -214,6 +217,7 @@ export interface GdsLayerInfo {
   name: string;
   color: string;
   visible: boolean;
+  pattern?: GdsPatternType;
   assignedMaskId?: string;
 }
 

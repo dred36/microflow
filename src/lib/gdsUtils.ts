@@ -6,6 +6,7 @@
 import {
   GdsLayoutData,
   GdsLayerInfo,
+  GdsPatternType,
   GdsPoint,
   GdsSectionLine,
   GdsShape,
@@ -21,6 +22,48 @@ export const GDS_LAYER_PALETTE = [
   '#06b6d4', // Cyan
   '#e879f9', // Fuchsia
 ];
+
+export const GDS_PATTERN_OPTIONS: {
+  id: GdsPatternType;
+  label: string;
+  shortLabel: string;
+}[] = [
+  { id: 'diagonal-right', label: 'Diagonal 45° (/)', shortLabel: '45° /' },
+  { id: 'diagonal-left', label: 'Diagonal -45° (\\)', shortLabel: '-45° \\' },
+  { id: 'crosshatch', label: 'Crosshatch (✕)', shortLabel: 'Cross ✕' },
+  { id: 'horizontal', label: 'Horizontal (≡)', shortLabel: 'Horiz ≡' },
+  { id: 'vertical', label: 'Vertical (|||)', shortLabel: 'Vert |||' },
+  { id: 'dots', label: 'Dots (•••)', shortLabel: 'Dots •' },
+  { id: 'stipple', label: 'Stipple (∵)', shortLabel: 'Stipple' },
+  { id: 'solid', label: 'Solid Tint', shortLabel: 'Solid' },
+  { id: 'outline', label: 'Outline Only', shortLabel: 'Outline' },
+];
+
+export const DEFAULT_GDS_LAYER_PATTERNS: GdsPatternType[] = [
+  'diagonal-right',
+  'diagonal-left',
+  'crosshatch',
+  'horizontal',
+  'vertical',
+  'dots',
+  'stipple',
+];
+
+/**
+ * Sorts shapes so layers near index 0 of `layers` (top of the layer stack UI)
+ * are returned last (drawn on top in SVG paint order), preserving relative order within each layer.
+ */
+export function sortShapesByLayerOrder(
+  shapes: GdsShape[],
+  layers: GdsLayerInfo[]
+): GdsShape[] {
+  const rank = new Map<number, number>();
+  const n = layers.length;
+  layers.forEach((l, idx) => {
+    rank.set(l.layer, n - idx);
+  });
+  return [...shapes].sort((a, b) => (rank.get(a.layer) ?? 0) - (rank.get(b.layer) ?? 0));
+}
 
 export const SECTION_LINE_COLORS = [
   '#fbbf24', // Amber (A-A')
@@ -421,6 +464,7 @@ export function parseGdsFile(
         name: `L${layer}/${datatype}`,
         color: GDS_LAYER_PALETTE[idx % GDS_LAYER_PALETTE.length],
         visible: true,
+        pattern: DEFAULT_GDS_LAYER_PATTERNS[idx % DEFAULT_GDS_LAYER_PATTERNS.length],
         assignedMaskId: linkedMask?.id,
       });
     }
@@ -1165,6 +1209,7 @@ export function createDefaultGdsLayout(
           name: m.layerCode || `L${idx + 1}`,
           color: m.color || GDS_LAYER_PALETTE[idx % GDS_LAYER_PALETTE.length],
           visible: true,
+          pattern: DEFAULT_GDS_LAYER_PATTERNS[idx % DEFAULT_GDS_LAYER_PATTERNS.length],
           assignedMaskId: m.id,
         }))
       : [
@@ -1174,6 +1219,7 @@ export function createDefaultGdsLayout(
             name: 'L1',
             color: GDS_LAYER_PALETTE[0],
             visible: true,
+            pattern: DEFAULT_GDS_LAYER_PATTERNS[0],
           },
         ];
 
@@ -1216,6 +1262,7 @@ export function createSampleGdsLayout(
       name: masks[0]?.layerCode || 'ACTV-1',
       color: masks[0]?.color || GDS_LAYER_PALETTE[0],
       visible: true,
+      pattern: 'diagonal-right',
       assignedMaskId: masks[0]?.id,
     },
     {
@@ -1224,6 +1271,7 @@ export function createSampleGdsLayout(
       name: masks[1]?.layerCode || 'POLY-2',
       color: masks[1]?.color || GDS_LAYER_PALETTE[1],
       visible: true,
+      pattern: 'diagonal-left',
       assignedMaskId: masks[1]?.id,
     },
     {
@@ -1232,6 +1280,7 @@ export function createSampleGdsLayout(
       name: masks[2]?.layerCode || 'MET1-3',
       color: masks[2]?.color || GDS_LAYER_PALETTE[2],
       visible: true,
+      pattern: 'crosshatch',
       assignedMaskId: masks[2]?.id,
     },
   ];
@@ -1244,6 +1293,7 @@ export function createSampleGdsLayout(
       name: masks[i].layerCode || `L${i + 1}`,
       color: masks[i].color || GDS_LAYER_PALETTE[i % GDS_LAYER_PALETTE.length],
       visible: true,
+      pattern: DEFAULT_GDS_LAYER_PATTERNS[i % DEFAULT_GDS_LAYER_PATTERNS.length],
       assignedMaskId: masks[i].id,
     });
   }

@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback, useId } from 'react';
 import {
   GdsConcatConfig,
   GdsLayerInfo,
   GdsLayoutData,
+  GdsPatternType,
   GdsPoint,
   GdsSectionLine,
   GdsShape,
@@ -15,7 +16,9 @@ import {
   ProcessFlow,
 } from '../types/microfab';
 import {
+  DEFAULT_GDS_LAYER_PATTERNS,
   GDS_LAYER_PALETTE,
+  GDS_PATTERN_OPTIONS,
   SECTION_LINE_COLORS,
   arcIntervalToPolylineSegments,
   computeGdsBounds,
@@ -35,6 +38,7 @@ import {
   shapeToPolygons,
   sliceGdsLayoutAlongSection,
   sliceGdsLayoutConcatenated,
+  sortShapesByLayerOrder,
   withSectionPoints,
 } from '../lib/gdsUtils';
 import { createNewMaskInFlow, updateMaskAndSyncSteps } from '../lib/maskUtils';
@@ -54,6 +58,9 @@ import {
   Grid,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  GripVertical,
   Link2,
   Eye,
   EyeOff,
@@ -66,6 +73,132 @@ import {
   MoveHorizontal,
   MoveVertical,
 } from 'lucide-react';
+
+function getGdsPatternDefId(color: string, pattern: GdsPatternType): string {
+  const safeColor = color.replace(/[^a-zA-Z0-9]/g, '') || 'default';
+  return `gds-pat-${pattern}-${safeColor}`;
+}
+
+function renderGdsSvgPatternDef(
+  id: string,
+  color: string,
+  pattern: GdsPatternType
+): React.ReactNode {
+  switch (pattern) {
+    case 'diagonal-right':
+      return (
+        <pattern
+          key={id}
+          id={id}
+          width="8"
+          height="8"
+          patternUnits="userSpaceOnUse"
+          patternTransform="rotate(45)"
+        >
+          <rect width="8" height="8" fill={color} fillOpacity="0.16" />
+          <line x1="0" y1="0" x2="0" y2="8" stroke={color} strokeOpacity="0.6" strokeWidth="1.5" />
+        </pattern>
+      );
+    case 'diagonal-left':
+      return (
+        <pattern
+          key={id}
+          id={id}
+          width="8"
+          height="8"
+          patternUnits="userSpaceOnUse"
+          patternTransform="rotate(-45)"
+        >
+          <rect width="8" height="8" fill={color} fillOpacity="0.16" />
+          <line x1="0" y1="0" x2="0" y2="8" stroke={color} strokeOpacity="0.6" strokeWidth="1.5" />
+        </pattern>
+      );
+    case 'crosshatch':
+      return (
+        <pattern key={id} id={id} width="10" height="10" patternUnits="userSpaceOnUse">
+          <rect width="10" height="10" fill={color} fillOpacity="0.14" />
+          <path
+            d="M 0 0 L 10 10 M 10 0 L 0 10"
+            stroke={color}
+            strokeOpacity="0.58"
+            strokeWidth="1.2"
+          />
+        </pattern>
+      );
+    case 'horizontal':
+      return (
+        <pattern key={id} id={id} width="8" height="7" patternUnits="userSpaceOnUse">
+          <rect width="8" height="7" fill={color} fillOpacity="0.15" />
+          <line x1="0" y1="3.5" x2="8" y2="3.5" stroke={color} strokeOpacity="0.62" strokeWidth="1.4" />
+        </pattern>
+      );
+    case 'vertical':
+      return (
+        <pattern key={id} id={id} width="7" height="8" patternUnits="userSpaceOnUse">
+          <rect width="7" height="8" fill={color} fillOpacity="0.15" />
+          <line x1="3.5" y1="0" x2="3.5" y2="8" stroke={color} strokeOpacity="0.62" strokeWidth="1.4" />
+        </pattern>
+      );
+    case 'dots':
+      return (
+        <pattern key={id} id={id} width="9" height="9" patternUnits="userSpaceOnUse">
+          <rect width="9" height="9" fill={color} fillOpacity="0.14" />
+          <circle cx="4.5" cy="4.5" r="1.6" fill={color} fillOpacity="0.72" />
+        </pattern>
+      );
+    case 'stipple':
+      return (
+        <pattern key={id} id={id} width="12" height="12" patternUnits="userSpaceOnUse">
+          <rect width="12" height="12" fill={color} fillOpacity="0.13" />
+          <circle cx="3" cy="3" r="1.2" fill={color} fillOpacity="0.72" />
+          <circle cx="9" cy="9" r="1.2" fill={color} fillOpacity="0.72" />
+          <circle cx="9" cy="3" r="0.8" fill={color} fillOpacity="0.45" />
+          <circle cx="3" cy="9" r="0.8" fill={color} fillOpacity="0.45" />
+        </pattern>
+      );
+    default:
+      return null;
+  }
+}
+
+const PatternSwatch: React.FC<{
+  color: string;
+  pattern: GdsPatternType;
+  size?: number;
+}> = ({ color, pattern, size = 14 }) => {
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, '');
+  const patId = `sw_${uid}_${pattern}`;
+  const fillVal =
+    pattern === 'outline'
+      ? 'none'
+      : pattern === 'solid'
+      ? color
+      : `url(#${patId})`;
+
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className="rounded-sm shrink-0 bg-slate-950"
+    >
+      {pattern !== 'solid' && pattern !== 'outline' && (
+        <defs>{renderGdsSvgPatternDef(patId, color, pattern)}</defs>
+      )}
+      <rect
+        x="0.75"
+        y="0.75"
+        width={size - 1.5}
+        height={size - 1.5}
+        rx="1.5"
+        fill={fillVal}
+        fillOpacity={pattern === 'solid' ? 0.42 : 1}
+        stroke={color}
+        strokeWidth="1.3"
+      />
+    </svg>
+  );
+};
 
 interface NmNumberInputProps {
   value: number;
@@ -206,6 +339,8 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
   const [arrayPitchX, setArrayPitchX] = useState<number>(1500);
   const [arrayPitchY, setArrayPitchY] = useState<number>(1500);
   const [draggingConcatId, setDraggingConcatId] = useState<string | null>(null);
+  const [draggingLayerIdx, setDraggingLayerIdx] = useState<number | null>(null);
+  const [dragOverLayerIdx, setDragOverLayerIdx] = useState<number | null>(null);
   const [draftPoints, setDraftPoints] = useState<GdsPoint[]>([]);
   const [dragBox, setDragBox] = useState<{ start: GdsPoint; current: GdsPoint } | null>(null);
   const [cursorWorld, setCursorWorld] = useState<GdsPoint | null>(null);
@@ -391,12 +526,12 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
     setDraftPoints([]);
   };
 
-  // Hit-testing for Select tool (including distance-to-segment fallback for thin paths)
+  // Hit-testing for Select tool respects current layer Z-order (topmost visible layer first)
   const findShapeAtPoint = (pt: GdsPoint): GdsShape | null => {
     const visibleLayers = new Set(layout.layers.filter((l) => l.visible).map((l) => l.layer));
     const minHitRadius = 8 / Math.max(1e-6, pxPerNm);
-    for (let i = layout.shapes.length - 1; i >= 0; i--) {
-      const s = layout.shapes[i];
+    for (let i = orderedShapes.length - 1; i >= 0; i--) {
+      const s = orderedShapes[i];
       if (!visibleLayers.has(s.layer)) continue;
 
       if (s.type === 'path' && s.points && s.points.length >= 2) {
@@ -763,12 +898,14 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
   const handleAddLayer = () => {
     const maxLayer = layout.layers.reduce((m, l) => Math.max(m, l.layer), 0);
     const nextNum = maxLayer + 1;
+    const idx = layout.layers.length;
     const newLayer: GdsLayerInfo = {
       layer: nextNum,
       datatype: 0,
       name: `L${nextNum}/0`,
       color: GDS_LAYER_PALETTE[(nextNum - 1) % GDS_LAYER_PALETTE.length],
       visible: true,
+      pattern: DEFAULT_GDS_LAYER_PATTERNS[idx % DEFAULT_GDS_LAYER_PATTERNS.length],
     };
     updateLayout({
       ...layout,
@@ -1098,6 +1235,53 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
     return map;
   }, [layout.layers]);
 
+  const orderedShapes = useMemo(
+    () => sortShapesByLayerOrder(layout.shapes, layout.layers),
+    [layout.shapes, layout.layers]
+  );
+
+  // Deduplicated (color, pattern) pairs needed in SVG <defs> for layers & per-shape overrides
+  const patternDefSpecs = useMemo(() => {
+    const map = new Map<string, { id: string; color: string; pattern: GdsPatternType }>();
+    const addSpec = (color: string, pattern: GdsPatternType) => {
+      if (pattern === 'solid' || pattern === 'outline') return;
+      const id = getGdsPatternDefId(color, pattern);
+      if (!map.has(id)) map.set(id, { id, color, pattern });
+    };
+    for (const l of layout.layers) {
+      addSpec(l.color || '#38bdf8', l.pattern || 'diagonal-right');
+    }
+    for (const s of layout.shapes) {
+      const lInfo = layerByNum.get(s.layer);
+      const color = lInfo?.color || '#38bdf8';
+      const pat = s.pattern || lInfo?.pattern || 'diagonal-right';
+      addSpec(color, pat);
+    }
+    return Array.from(map.values());
+  }, [layout.layers, layout.shapes, layerByNum]);
+
+  const handleMoveLayerOrder = (idx: number, dir: -1 | 1) => {
+    const swapIdx = idx + dir;
+    if (swapIdx < 0 || swapIdx >= layout.layers.length) return;
+    const nextLayers = [...layout.layers];
+    [nextLayers[idx], nextLayers[swapIdx]] = [nextLayers[swapIdx], nextLayers[idx]];
+    updateLayout({ ...layout, layers: nextLayers });
+  };
+
+  const handleReorderLayerDrop = (targetIdx: number) => {
+    if (draggingLayerIdx === null || draggingLayerIdx === targetIdx) {
+      setDraggingLayerIdx(null);
+      setDragOverLayerIdx(null);
+      return;
+    }
+    const nextLayers = [...layout.layers];
+    const [moved] = nextLayers.splice(draggingLayerIdx, 1);
+    nextLayers.splice(targetIdx, 0, moved);
+    updateLayout({ ...layout, layers: nextLayers });
+    setDraggingLayerIdx(null);
+    setDragOverLayerIdx(null);
+  };
+
   const selectedShape = layout.shapes.find((s) => s.id === selectedShapeId) || null;
   const activeLayerInfo = layerByNum.get(activeLayerNum) || layout.layers[0];
 
@@ -1338,19 +1522,9 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
             onDoubleClick={handleSvgDoubleClick}
           >
             <defs>
-              {layout.layers.map((layer) => (
-                <pattern
-                  key={`gds_pat_${layer.layer}`}
-                  id={`gds-hatch-${layer.layer}`}
-                  width="8"
-                  height="8"
-                  patternUnits="userSpaceOnUse"
-                  patternTransform="rotate(45)"
-                >
-                  <rect width="8" height="8" fill={layer.color} fillOpacity="0.16" />
-                  <line x1="0" y1="0" x2="0" y2="8" stroke={layer.color} strokeOpacity="0.55" strokeWidth="1.5" />
-                </pattern>
-              ))}
+              {patternDefSpecs.map((spec) =>
+                renderGdsSvgPatternDef(spec.id, spec.color, spec.pattern)
+              )}
             </defs>
 
             {/* Coordinate Grid */}
@@ -1425,12 +1599,21 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
               );
             })()}
 
-            {/* Rendered GDS Shapes */}
+            {/* Rendered GDS Shapes (painted bottom-to-top per layer stack order) */}
             <g>
-              {layout.shapes.map((shape) => {
+              {orderedShapes.map((shape) => {
                 const layerInfo = layerByNum.get(shape.layer);
                 if (layerInfo && !layerInfo.visible) return null;
                 const color = layerInfo?.color || '#38bdf8';
+                const effectivePattern: GdsPatternType =
+                  shape.pattern || layerInfo?.pattern || 'diagonal-right';
+                const fillAttr =
+                  effectivePattern === 'outline'
+                    ? 'none'
+                    : effectivePattern === 'solid'
+                    ? color
+                    : `url(#${getGdsPatternDefId(color, effectivePattern)})`;
+                const fillOpacity = effectivePattern === 'solid' ? 0.35 : undefined;
                 const isSel = selectedShapeId === shape.id;
                 const polys = shapeToPolygons(shape);
 
@@ -1447,7 +1630,8 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
                         <polygon
                           key={`${shape.id}_p_${pIdx}`}
                           points={ptsAttr}
-                          fill={`url(#gds-hatch-${shape.layer})`}
+                          fill={fillAttr}
+                          fillOpacity={fillOpacity}
                           stroke={isSel ? '#ffffff' : color}
                           strokeWidth={isSel ? 2.2 : 1.4}
                         />
@@ -1923,60 +2107,116 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
 
         {/* Right Layer, Reticle Mapping & Selected Object Inspector Panel */}
         <div className="w-64 sm:w-72 border-l border-slate-800 bg-slate-900/60 flex flex-col shrink-0 overflow-hidden">
-          <div className="px-3 py-2.5 border-b border-slate-800 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
-              <Layers className="w-3.5 h-3.5 text-sky-400" />
-              <span>GDS Layers ({layout.layers.length})</span>
+          <div className="px-3 py-2 border-b border-slate-800 shrink-0 space-y-0.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+                <Layers className="w-3.5 h-3.5 text-sky-400" />
+                <span>GDS Layers ({layout.layers.length})</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleAddLayer}
+                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 text-[10px] font-semibold border border-slate-700"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Layer</span>
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={handleAddLayer}
-              className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 text-[10px] font-semibold border border-slate-700"
-            >
-              <Plus className="w-3 h-3" />
-              <span>Layer</span>
-            </button>
+            <div className="text-[9.5px] text-slate-500">
+              Drag or use ↑↓ to reorder stack (top renders in front)
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-            {layout.layers.map((layer) => {
+            {layout.layers.map((layer, layerIdx) => {
               const isActive = layer.layer === activeLayerNum;
               const shapeCount = layout.shapes.filter((s) => s.layer === layer.layer).length;
+              const layerPattern: GdsPatternType = layer.pattern || 'diagonal-right';
+              const isDragging = draggingLayerIdx === layerIdx;
+              const isDropTarget =
+                dragOverLayerIdx === layerIdx &&
+                draggingLayerIdx !== null &&
+                draggingLayerIdx !== layerIdx;
               return (
                 <div
                   key={`${layer.layer}_${layer.datatype}`}
                   onClick={() => setActiveLayerNum(layer.layer)}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (draggingLayerIdx !== null && dragOverLayerIdx !== layerIdx) {
+                      setDragOverLayerIdx(layerIdx);
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleReorderLayerDrop(layerIdx);
+                  }}
                   className={`p-2 rounded-lg border cursor-pointer transition-colors space-y-1.5 ${
-                    isActive
+                    isDropTarget
+                      ? 'bg-sky-950/55 border-sky-400 ring-1 ring-sky-400/70'
+                      : isActive
                       ? 'bg-sky-950/35 border-sky-500/70'
                       : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
-                  }`}
+                  } ${isDragging ? 'opacity-50' : ''}`}
                 >
-                  <div className="flex items-center justify-between gap-1.5">
+                  <div
+                    draggable
+                    onDragStart={() => setDraggingLayerIdx(layerIdx)}
+                    onDragEnd={() => {
+                      setDraggingLayerIdx(null);
+                      setDragOverLayerIdx(null);
+                    }}
+                    className="flex items-center justify-between gap-1"
+                  >
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span
-                        className="w-2.5 h-2.5 rounded-sm shrink-0"
-                        style={{ backgroundColor: layer.color }}
-                      />
-                      <span className="font-mono text-[11px] font-bold text-slate-200 truncate">
+                        title="Drag to reorder GDS layer"
+                        className="shrink-0 cursor-grab active:cursor-grabbing text-slate-500 hover:text-slate-300"
+                      >
+                        <GripVertical className="w-3 h-3" />
+                      </span>
+                      <PatternSwatch color={layer.color} pattern={layerPattern} size={13} />
+                      <span className="font-mono text-[11px] font-bold text-slate-200 shrink-0">
                         L{layer.layer}/{layer.datatype}
                       </span>
                       <span className="text-[10px] text-slate-400 truncate">{layer.name}</span>
                     </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span className="text-[10px] font-mono text-slate-500">{shapeCount}</span>
+                    <div
+                      className="flex items-center gap-0.5 shrink-0"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <span className="text-[10px] font-mono text-slate-500 mr-0.5">
+                        {shapeCount}
+                      </span>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        disabled={layerIdx === 0}
+                        onClick={() => handleMoveLayerOrder(layerIdx, -1)}
+                        className="p-0.5 text-slate-400 hover:text-white disabled:opacity-25 disabled:pointer-events-none"
+                        title="Move layer up (bring forward)"
+                      >
+                        <ChevronUp className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={layerIdx === layout.layers.length - 1}
+                        onClick={() => handleMoveLayerOrder(layerIdx, 1)}
+                        className="p-0.5 text-slate-400 hover:text-white disabled:opacity-25 disabled:pointer-events-none"
+                        title="Move layer down (send backward)"
+                      >
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
                           updateLayout({
                             ...layout,
                             layers: layout.layers.map((l) =>
                               l.layer === layer.layer ? { ...l, visible: !l.visible } : l
                             ),
-                          });
-                        }}
+                          })
+                        }
                         className="p-0.5 text-slate-400 hover:text-white"
                         title={layer.visible ? 'Hide layer' : 'Show layer'}
                       >
@@ -1985,8 +2225,11 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
                     </div>
                   </div>
 
-                  {/* Link GDS Layer -> Reticle Mask */}
-                  <div onClick={(e) => e.stopPropagation()}>
+                  {/* Link GDS Layer -> Reticle Mask & Fill Pattern */}
+                  <div
+                    className="grid grid-cols-5 gap-1 items-center"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <select
                       value={layer.assignedMaskId || ''}
                       onChange={(e) => {
@@ -1998,13 +2241,33 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
                           ),
                         });
                       }}
-                      className="w-full px-1.5 py-1 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-300 focus:outline-none focus:border-sky-500"
+                      className="col-span-3 w-full px-1.5 py-1 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-300 focus:outline-none focus:border-sky-500"
                       title="Link GDS layer to a Photomask Reticle"
                     >
-                      <option value="">Map to Reticle: (None)</option>
+                      <option value="">Reticle: (None)</option>
                       {masks.map((m) => (
                         <option key={m.id} value={m.id}>
-                          → {m.layerCode || m.name} ({m.name})
+                          → {m.layerCode || m.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={layerPattern}
+                      onChange={(e) => {
+                        const nextPat = e.target.value as GdsPatternType;
+                        updateLayout({
+                          ...layout,
+                          layers: layout.layers.map((l) =>
+                            l.layer === layer.layer ? { ...l, pattern: nextPat } : l
+                          ),
+                        });
+                      }}
+                      className="col-span-2 w-full px-1 py-1 rounded bg-slate-900 border border-slate-800 text-[10px] text-sky-300 focus:outline-none focus:border-sky-500"
+                      title="Change fill pattern for shapes on this GDS layer"
+                    >
+                      {GDS_PATTERN_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.shortLabel}
                         </option>
                       ))}
                     </select>
@@ -2174,6 +2437,46 @@ export const GdsLayoutEditor: React.FC<GdsLayoutEditorProps> = ({
                   ))}
                 </select>
               </div>
+
+              {/* Fill Pattern Assignment (Shape override or Layer default) */}
+              {(() => {
+                const shapeLayer = layerByNum.get(selectedShape.layer);
+                const layerDefPat: GdsPatternType = shapeLayer?.pattern || 'diagonal-right';
+                const layerDefLabel =
+                  GDS_PATTERN_OPTIONS.find((o) => o.id === layerDefPat)?.shortLabel || '45° /';
+                const effPat: GdsPatternType = selectedShape.pattern || layerDefPat;
+                return (
+                  <div className="grid grid-cols-3 gap-1.5 items-center">
+                    <span className="text-[10px] text-slate-400">Fill Pattern</span>
+                    <div className="col-span-2 flex items-center gap-1.5">
+                      <PatternSwatch
+                        color={shapeLayer?.color || '#38bdf8'}
+                        pattern={effPat}
+                        size={16}
+                      />
+                      <select
+                        value={selectedShape.pattern || ''}
+                        onChange={(e) => {
+                          const val = e.target.value as GdsPatternType | '';
+                          handleUpdateShape({
+                            ...selectedShape,
+                            pattern: val || undefined,
+                          });
+                        }}
+                        className="flex-1 min-w-0 px-1.5 py-1 rounded bg-slate-900 border border-slate-700 text-[10px] text-sky-300 focus:outline-none focus:border-sky-500"
+                        title="Override fill pattern for this selected shape"
+                      >
+                        <option value="">Layer ({layerDefLabel})</option>
+                        {GDS_PATTERN_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* RECTANGLE PROPERTIES */}
               {selectedShape.type === 'rect' && (
