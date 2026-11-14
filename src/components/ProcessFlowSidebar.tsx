@@ -18,7 +18,11 @@ import {
   buildTimelineItems,
   moveBlockInTimeline,
   moveStepInTimeline,
+  reorderBlockInTimeline,
+  reorderStepInTimeline,
+  StepDropTarget,
   insertStepIntoTimeline,
+  insertStepAfterIndex,
   deleteStepFromTimeline,
   normalizeFlowBlocksOrder,
   BLOCK_PALETTE,
@@ -45,6 +49,7 @@ import {
   Edit2,
   Check,
   Link2,
+  GripVertical,
 } from 'lucide-react';
 
 interface ProcessFlowSidebarProps {
@@ -64,8 +69,13 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
   onUpdateFlow,
   onOpenPresets,
 }) => {
+  type AddStepPlacement =
+    | { mode: 'end' }
+    | { mode: 'after-selected' }
+    | { mode: 'into-block'; blockId: string };
+
   const [showAddMenu, setShowAddMenu] = useState<boolean>(false);
-  const [targetBlockForNewStep, setTargetBlockForNewStep] = useState<string | null>(null);
+  const [addPlacement, setAddPlacement] = useState<AddStepPlacement>({ mode: 'end' });
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editingBlockName, setEditingBlockName] = useState<string>('');
 
@@ -75,6 +85,19 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
   const [newBlockColor, setNewBlockColor] = useState<string>(BLOCK_PALETTE[0]);
   const [groupUngroupedOnCreate, setGroupUngroupedOnCreate] = useState<boolean>(false);
   const [deleteConfirmBlockId, setDeleteConfirmBlockId] = useState<string | null>(null);
+
+  // Drag-and-drop reordering state for steps and fabrication blocks
+  type DragSource =
+    | { kind: 'step'; stepId: string; blockId?: string }
+    | { kind: 'block'; blockId: string };
+
+  type DropIndicator =
+    | { kind: 'timeline-item'; timelineIndex: number; position: 'before' | 'after' }
+    | { kind: 'block-step'; blockId: string; stepId: string; position: 'before' | 'after' }
+    | { kind: 'into-block'; blockId: string };
+
+  const [dragSource, setDragSource] = useState<DragSource | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
 
   const blocks = flow.blocks || [];
 
@@ -100,8 +123,9 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
     }
   };
 
-  const handleAddStep = (type: ProcessStepType, blockId?: string | null) => {
+  const handleAddStep = (type: ProcessStepType) => {
     const id = `step_${Date.now()}`;
+    const blockId = addPlacement.mode === 'into-block' ? addPlacement.blockId : undefined;
     let newStep: ProcessStep;
 
     switch (type) {
@@ -243,11 +267,18 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
         };
     }
 
-    const { flow: newFlow, insertedIndex } = insertStepIntoTimeline(flow, newStep, blockId);
+    const { flow: newFlow, insertedIndex } =
+      addPlacement.mode === 'after-selected'
+        ? insertStepAfterIndex(flow, newStep, activeStepIndex)
+        : insertStepIntoTimeline(
+            flow,
+            newStep,
+            addPlacement.mode === 'into-block' ? addPlacement.blockId : null
+          );
     onUpdateFlow(newFlow);
     onSelectStepIndex(insertedIndex);
     setShowAddMenu(false);
-    setTargetBlockForNewStep(null);
+    setAddPlacement({ mode: 'end' });
   };
 
   const handleMoveStep = (idx: number, direction: 'up' | 'down') => {
@@ -368,33 +399,220 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
   const totalSubThickness = subLayers.reduce((acc, l) => acc + (l.thickness || 0), 0);
   const isSubstrateSelected = activeStepIndex === -1;
 
+  const applyFlowWithActivePreserved = (nextFlow: ProcessFlow) => {
+    if (nextFlow === flow) return;
+    const activeStepId = activeStepIndex >= 0 ? flow.steps[activeStepIndex]?.id : null;
+    onUpdateFlow(nextFlow);
+    if (activeStepId) {
+      const nextActiveIdx = nextFlow.steps.findIndex((s) => s.id === activeStepId);
+      if (nextActiveIdx >= 0 && nextActiveIdx !== activeStepIndex) {
+        onSelectStepIndex(nextActiveIdx);
+      }
+    }
+  };
+
+  const clearDragState = () => {
+    setDragSource(null);
+    setDropIndicator(null);
+  };
+
+  const commitDrop = (indicator: DropIndicator | null) => {
+    if (!dragSource || !indicator) {
+      clearDragState();
+      return;
+    }
+
+    if (dragSource.kind === 'block') {
+      if (indicator.kind === 'timeline-item') {
+        const nextFlow = reorderBlockInTimeline(
+          flow,
+          dragSource.blockId,
+          indicator.timelineIndex,
+          indicator.position
+        );
+        applyFlowWithActivePreserved(nextFlow);
+      }
+      clearDragState();
+      return;
+    }
+
+    // dragSource.kind === 'step'
+    const target: StepDropTarget = indicator;
+    const nextFlow = reorderStepInTimeline(flow, dragSource.stepId, target);
+    applyFlowWithActivePreserved(nextFlow);
+    clearDragState();
+  };
+
+  const DropLine = () => (
+    <div className="relative h-0.5 my-0.5 bg-sky-400 rounded-full shadow-[0_0_8px_rgba(56,189,248,0.85)] pointer-events-none">
+      <span className="absolute -left-0.5 -top-[3px] w-2 h-2 rounded-full bg-sky-400" />
+    </div>
+  );
+
   // Render a step item card
-  const renderStepItem = (step: ProcessStep, globalIdx: number) => {
+  const renderStepItem = (
+    step: ProcessStep,
+    globalIdx: number,
+    context:
+      | { scope: 'timeline'; timelineIndex: number }
+      | { scope: 'block'; blockId: string }
+  ) => {
     const isSelected = activeStepIndex === globalIdx;
+    const isBeingDragged =
+      dragSource?.kind === 'step' && dragSource.stepId === step.id;
+
+    const showBeforeLine =
+      (context.scope === 'timeline' &&
+        dropIndicator?.kind === 'timeline-item' &&
+        dropIndicator.timelineIndex === context.timelineIndex &&
+        dropIndicator.position === 'before') ||
+      (context.scope === 'block' &&
+        dropIndicator?.kind === 'block-step' &&
+        dropIndicator.blockId === context.blockId &&
+        dropIndicator.stepId === step.id &&
+        dropIndicator.position === 'before');
+
+    const showAfterLine =
+      (context.scope === 'timeline' &&
+        dropIndicator?.kind === 'timeline-item' &&
+        dropIndicator.timelineIndex === context.timelineIndex &&
+        dropIndicator.position === 'after') ||
+      (context.scope === 'block' &&
+        dropIndicator?.kind === 'block-step' &&
+        dropIndicator.blockId === context.blockId &&
+        dropIndicator.stepId === step.id &&
+        dropIndicator.position === 'after');
+
+    const handleStepDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', `step:${step.id}`);
+      setDragSource({ kind: 'step', stepId: step.id, blockId: step.blockId });
+    };
+
+    const handleStepDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+      if (!dragSource) return;
+
+      // If dragging a whole block over a step inside another block, let parent block handle it
+      if (dragSource.kind === 'block' && context.scope === 'block') {
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'move';
+
+      const rect = e.currentTarget.getBoundingClientRect();
+      const position: 'before' | 'after' =
+        e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+
+      if (dragSource.kind === 'block') {
+        if (context.scope === 'timeline') {
+          setDropIndicator({
+            kind: 'timeline-item',
+            timelineIndex: context.timelineIndex,
+            position,
+          });
+        }
+        return;
+      }
+
+      // Dragging a step
+      if (dragSource.stepId === step.id) {
+        setDropIndicator(null);
+        return;
+      }
+
+      if (context.scope === 'block') {
+        setDropIndicator({
+          kind: 'block-step',
+          blockId: context.blockId,
+          stepId: step.id,
+          position,
+        });
+      } else {
+        setDropIndicator({
+          kind: 'timeline-item',
+          timelineIndex: context.timelineIndex,
+          position,
+        });
+      }
+    };
+
+    const handleStepDrop = (e: React.DragEvent<HTMLDivElement>) => {
+      if (!dragSource) return;
+      if (dragSource.kind === 'block' && context.scope === 'block') {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+
+      const rect = e.currentTarget.getBoundingClientRect();
+      const position: 'before' | 'after' =
+        e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+
+      let target: DropIndicator | null = null;
+      if (dragSource.kind === 'block' && context.scope === 'timeline') {
+        target = {
+          kind: 'timeline-item',
+          timelineIndex: context.timelineIndex,
+          position,
+        };
+      } else if (dragSource.kind === 'step' && dragSource.stepId !== step.id) {
+        target =
+          context.scope === 'block'
+            ? {
+                kind: 'block-step',
+                blockId: context.blockId,
+                stepId: step.id,
+                position,
+              }
+            : {
+                kind: 'timeline-item',
+                timelineIndex: context.timelineIndex,
+                position,
+              };
+      }
+      commitDrop(target);
+    };
 
     return (
-      <div
-        key={step.id}
-        onClick={() => onSelectStepIndex(globalIdx)}
-        className={`group relative flex items-center justify-between p-2 rounded-xl text-xs transition-all cursor-pointer border ${
-          isSelected
-            ? 'bg-sky-950/60 border-sky-500 text-white shadow-md'
-            : step.enabled
-            ? 'bg-slate-950/40 border-slate-800/80 hover:bg-slate-800/50 text-slate-300'
-            : 'bg-slate-950/20 border-slate-800/40 opacity-50 text-slate-500'
-        }`}
-      >
-        <div className="flex items-center gap-2.5 min-w-0 pr-1 flex-1">
-          {/* Step global index badge */}
-          <span
-            className={`w-5 h-5 rounded-md flex items-center justify-center font-mono text-[10px] font-semibold flex-shrink-0 ${
-              isSelected
-                ? 'bg-sky-500 text-white'
-                : 'bg-slate-800 text-slate-400'
-            }`}
-          >
-            {globalIdx + 1}
-          </span>
+      <div key={step.id} className="space-y-0.5">
+        {showBeforeLine && <DropLine />}
+        <div
+          draggable
+          onDragStart={handleStepDragStart}
+          onDragOver={handleStepDragOver}
+          onDrop={handleStepDrop}
+          onDragEnd={clearDragState}
+          onClick={() => onSelectStepIndex(globalIdx)}
+          className={`group relative flex items-center justify-between p-2 rounded-xl text-xs transition-all cursor-pointer border ${
+            isBeingDragged ? 'opacity-40 scale-[0.98]' : ''
+          } ${
+            isSelected
+              ? 'bg-sky-950/60 border-sky-500 text-white shadow-md'
+              : step.enabled
+              ? 'bg-slate-950/40 border-slate-800/80 hover:bg-slate-800/50 text-slate-300'
+              : 'bg-slate-950/20 border-slate-800/40 opacity-50 text-slate-500'
+          }`}
+        >
+          <div className="flex items-center gap-1.5 min-w-0 pr-1 flex-1">
+            {/* Drag handle */}
+            <GripVertical
+              className="w-3.5 h-3.5 text-slate-600 group-hover:text-slate-400 cursor-grab active:cursor-grabbing flex-shrink-0 -ml-0.5"
+              aria-label="Drag to reorder step"
+            />
+
+            {/* Step global index badge */}
+            <span
+              className={`w-5 h-5 rounded-md flex items-center justify-center font-mono text-[10px] font-semibold flex-shrink-0 ${
+                isSelected
+                  ? 'bg-sky-500 text-white'
+                  : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              {globalIdx + 1}
+            </span>
 
           {/* Step icon */}
           <div className="flex-shrink-0">{getStepIcon(step.type)}</div>
@@ -506,6 +724,8 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
+        </div>
+        {showAfterLine && <DropLine />}
       </div>
     );
   };
@@ -609,7 +829,32 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
       </div>
 
       {/* FABRICATION STEPS LIST - GROUPED BY BLOCK HIERARCHY */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-3">
+      <div
+        className="flex-1 overflow-y-auto p-2 space-y-3"
+        onDragOver={(e) => {
+          if (!dragSource) return;
+          const items = buildTimelineItems(flow);
+          if (items.length === 0) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          setDropIndicator({
+            kind: 'timeline-item',
+            timelineIndex: items.length - 1,
+            position: 'after',
+          });
+        }}
+        onDrop={(e) => {
+          if (!dragSource) return;
+          const items = buildTimelineItems(flow);
+          if (items.length === 0) return;
+          e.preventDefault();
+          commitDrop({
+            kind: 'timeline-item',
+            timelineIndex: items.length - 1,
+            position: 'after',
+          });
+        }}
+      >
         {/* In-app New Fabrication Block Form */}
         {isCreatingBlock && (
           <div className="p-3 rounded-xl bg-slate-950 border border-sky-500/70 shadow-2xl space-y-2.5 animate-in fade-in zoom-in-95 duration-100 text-xs">
@@ -699,170 +944,394 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
 
           return timelineItems.map((item, timelineIdx) => {
             if (item.kind === 'step') {
-              return renderStepItem(item.step, item.idx);
+              return renderStepItem(item.step, item.idx, {
+                scope: 'timeline',
+                timelineIndex: timelineIdx,
+              });
             }
 
             const { block, steps: blockStepsWithIndex } = item;
             const isEditing = editingBlockId === block.id;
+            const isBlockBeingDragged =
+              dragSource?.kind === 'block' && dragSource.blockId === block.id;
+            const isDropIntoBlock =
+              dropIndicator?.kind === 'into-block' &&
+              dropIndicator.blockId === block.id;
+            const showBlockBefore =
+              dropIndicator?.kind === 'timeline-item' &&
+              dropIndicator.timelineIndex === timelineIdx &&
+              dropIndicator.position === 'before';
+            const showBlockAfter =
+              dropIndicator?.kind === 'timeline-item' &&
+              dropIndicator.timelineIndex === timelineIdx &&
+              dropIndicator.position === 'after';
+
+            const computeBlockDropTarget = (
+              e: React.DragEvent<HTMLDivElement>,
+              zone: 'container' | 'header' | 'body'
+            ): DropIndicator | null => {
+              if (!dragSource) return null;
+
+              if (dragSource.kind === 'block') {
+                if (dragSource.blockId === block.id) return null;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const position: 'before' | 'after' =
+                  e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                return {
+                  kind: 'timeline-item',
+                  timelineIndex: timelineIdx,
+                  position,
+                };
+              }
+
+              // dragSource.kind === 'step'
+              if (zone === 'header') {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const relY = e.clientY - rect.top;
+                if (relY < rect.height * 0.28) {
+                  return {
+                    kind: 'timeline-item',
+                    timelineIndex: timelineIdx,
+                    position: 'before',
+                  };
+                }
+                if (block.collapsed && relY > rect.height * 0.78) {
+                  return {
+                    kind: 'timeline-item',
+                    timelineIndex: timelineIdx,
+                    position: 'after',
+                  };
+                }
+                if (dragSource.blockId !== block.id) {
+                  return { kind: 'into-block', blockId: block.id };
+                }
+                return null;
+              }
+
+              if (zone === 'body') {
+                if (dragSource.blockId !== block.id) {
+                  return { kind: 'into-block', blockId: block.id };
+                }
+                return null;
+              }
+
+              // Container bottom edge below steps -> drop ungrouped after block
+              const rect = e.currentTarget.getBoundingClientRect();
+              if (rect.bottom - e.clientY <= 12) {
+                return {
+                  kind: 'timeline-item',
+                  timelineIndex: timelineIdx,
+                  position: 'after',
+                };
+              }
+              return null;
+            };
 
             return (
               <div
                 key={block.id}
-                className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden shadow-sm"
+                className="space-y-1"
+                onDragOver={(e) => {
+                  if (!dragSource) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.dataTransfer.dropEffect = 'move';
+                  const target = computeBlockDropTarget(e, 'container');
+                  if (target) {
+                    setDropIndicator(target);
+                  } else if (dragSource.kind === 'block' && dragSource.blockId === block.id) {
+                    setDropIndicator(null);
+                  }
+                }}
+                onDrop={(e) => {
+                  if (!dragSource) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const target = computeBlockDropTarget(e, 'container');
+                  if (target) {
+                    commitDrop(target);
+                  } else {
+                    clearDragState();
+                  }
+                }}
               >
-                {/* Block Header */}
+                {showBlockBefore && <DropLine />}
                 <div
-                  onClick={() => handleToggleBlock(block.id)}
-                  className="flex items-center justify-between px-2.5 py-2 bg-slate-900/90 hover:bg-slate-850 cursor-pointer border-b border-slate-800/80 transition-colors group"
+                  className={`rounded-xl border bg-slate-950/50 overflow-hidden shadow-sm transition-all ${
+                    isBlockBeingDragged ? 'opacity-40 scale-[0.99]' : ''
+                  } ${
+                    isDropIntoBlock
+                      ? 'border-sky-400 ring-2 ring-sky-500/60 bg-sky-950/25'
+                      : 'border-slate-800'
+                  }`}
                 >
-                  <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleToggleBlock(block.id);
-                      }}
-                      className="p-0.5 text-slate-400 hover:text-white"
-                    >
-                      {block.collapsed ? (
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      ) : (
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-
-                    <span
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: block.color || '#0ea5e9' }}
-                    />
-
-                    {isEditing ? (
-                      <div
-                        className="flex items-center gap-1 flex-1"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <input
-                          type="text"
-                          value={editingBlockName}
-                          onChange={(e) => setEditingBlockName(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleSaveBlockName(block.id)}
-                          autoFocus
-                          className="bg-slate-950 border border-sky-500 rounded px-1.5 py-0.5 text-xs text-white flex-1"
-                        />
-                        <button
-                          onClick={() => handleSaveBlockName(block.id)}
-                          className="p-1 text-emerald-400 hover:text-emerald-300"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="font-semibold text-xs text-slate-200 truncate">
-                        {block.name}
-                      </span>
-                    )}
-                  </div>
-
+                  {/* Block Header */}
                   <div
-                    className="flex items-center gap-0.5 shrink-0 ml-2"
-                    onClick={(e) => e.stopPropagation()}
+                    draggable={!isEditing}
+                    onDragStart={(e) => {
+                      if (isEditing) return;
+                      e.stopPropagation();
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', `block:${block.id}`);
+                      setDragSource({ kind: 'block', blockId: block.id });
+                    }}
+                    onDragEnd={clearDragState}
+                    onDragOver={(e) => {
+                      if (!dragSource) return;
+                      if (dragSource.kind === 'block') return; // handled by block wrapper
+                      const target = computeBlockDropTarget(e, 'header');
+                      e.preventDefault();
+                      e.stopPropagation();
+                      e.dataTransfer.dropEffect = 'move';
+                      setDropIndicator(target);
+                    }}
+                    onDrop={(e) => {
+                      if (!dragSource) return;
+                      if (dragSource.kind === 'block') return;
+                      const target = computeBlockDropTarget(e, 'header');
+                      e.preventDefault();
+                      e.stopPropagation();
+                      commitDrop(target);
+                    }}
+                    onClick={() => handleToggleBlock(block.id)}
+                    className="flex items-center justify-between px-2.5 py-2 bg-slate-900/90 hover:bg-slate-850 cursor-pointer border-b border-slate-800/80 transition-colors group"
                   >
-                    <span className="text-[10px] font-mono text-slate-500 mr-1">
-                      {blockStepsWithIndex.length} {blockStepsWithIndex.length === 1 ? 'step' : 'steps'}
-                    </span>
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                      {!isEditing && (
+                        <GripVertical
+                          className="w-3.5 h-3.5 text-slate-600 group-hover:text-slate-300 cursor-grab active:cursor-grabbing shrink-0 -ml-0.5"
+                          aria-label="Drag to reorder block"
+                        />
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleToggleBlock(block.id);
+                        }}
+                        className="p-0.5 text-slate-400 hover:text-white"
+                      >
+                        {block.collapsed ? (
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        )}
+                      </button>
 
-                    <div className="flex items-center opacity-70 group-hover:opacity-100 transition-opacity">
-                      <button
-                        disabled={timelineIdx === 0}
-                        onClick={(e) => handleMoveBlock(block.id, 'up', e)}
-                        className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-white disabled:opacity-20 transition-colors"
-                        title="Move Block Up"
-                      >
-                        <ArrowUp className="w-3 h-3" />
-                      </button>
-                      <button
-                        disabled={timelineIdx === timelineItems.length - 1}
-                        onClick={(e) => handleMoveBlock(block.id, 'down', e)}
-                        className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-white disabled:opacity-20 transition-colors"
-                        title="Move Block Down"
-                      >
-                        <ArrowDown className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditingBlockId(block.id);
-                          setEditingBlockName(block.name);
-                        }}
-                        className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-white transition-colors"
-                        title="Rename Block"
-                      >
-                        <Edit2 className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => {
-                          setTargetBlockForNewStep(block.id);
-                          setShowAddMenu(true);
-                        }}
-                        className="p-1 rounded hover:bg-slate-700/80 text-sky-400 hover:text-sky-300 transition-colors"
-                        title="Add Step inside this Block"
-                      >
-                        <Plus className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={(e) => handleDeleteBlock(block.id, e)}
-                        className="p-1 rounded hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 transition-colors"
-                        title="Delete / Ungroup Block"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: block.color || '#0ea5e9' }}
+                      />
+
+                      {isEditing ? (
+                        <div
+                          className="flex items-center gap-1 flex-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="text"
+                            value={editingBlockName}
+                            onChange={(e) => setEditingBlockName(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleSaveBlockName(block.id)}
+                            autoFocus
+                            className="bg-slate-950 border border-sky-500 rounded px-1.5 py-0.5 text-xs text-white flex-1"
+                          />
+                          <button
+                            onClick={() => handleSaveBlockName(block.id)}
+                            className="p-1 text-emerald-400 hover:text-emerald-300"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="font-semibold text-xs text-slate-200 truncate">
+                          {block.name}
+                        </span>
+                      )}
                     </div>
-                  </div>
-                </div>
 
-                {/* Block Steps */}
-                {!block.collapsed && (
-                  <div className="p-1.5 space-y-1 bg-slate-950/20">
-                    {blockStepsWithIndex.map(({ step, idx }) => renderStepItem(step, idx))}
+                    <div
+                      className="flex items-center gap-0.5 shrink-0 ml-2"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <span className="text-[10px] font-mono text-slate-500 mr-1">
+                        {blockStepsWithIndex.length} {blockStepsWithIndex.length === 1 ? 'step' : 'steps'}
+                      </span>
 
-                    {blockStepsWithIndex.length === 0 && (
-                      <div className="p-3 text-center text-slate-500 text-[11px] italic">
-                        No operations in this block yet.{' '}
+                      <div className="flex items-center opacity-70 group-hover:opacity-100 transition-opacity">
+                        <button
+                          disabled={timelineIdx === 0}
+                          onClick={(e) => handleMoveBlock(block.id, 'up', e)}
+                          className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-white disabled:opacity-20 transition-colors"
+                          title="Move Block Up"
+                        >
+                          <ArrowUp className="w-3 h-3" />
+                        </button>
+                        <button
+                          disabled={timelineIdx === timelineItems.length - 1}
+                          onClick={(e) => handleMoveBlock(block.id, 'down', e)}
+                          className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-white disabled:opacity-20 transition-colors"
+                          title="Move Block Down"
+                        >
+                          <ArrowDown className="w-3 h-3" />
+                        </button>
                         <button
                           onClick={() => {
-                            setTargetBlockForNewStep(block.id);
+                            setEditingBlockId(block.id);
+                            setEditingBlockName(block.name);
+                          }}
+                          className="p-1 rounded hover:bg-slate-700/80 text-slate-400 hover:text-white transition-colors"
+                          title="Rename Block"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setAddPlacement({ mode: 'into-block', blockId: block.id });
                             setShowAddMenu(true);
                           }}
-                          className="text-sky-400 hover:underline"
+                          className="p-1 rounded hover:bg-slate-700/80 text-sky-400 hover:text-sky-300 transition-colors"
+                          title="Add Step inside this Block"
                         >
-                          + Add Step
+                          <Plus className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={(e) => handleDeleteBlock(block.id, e)}
+                          className="p-1 rounded hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 transition-colors"
+                          title="Delete / Ungroup Block"
+                        >
+                          <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
-                    )}
+                    </div>
                   </div>
-                )}
+
+                  {/* Block Steps */}
+                  {!block.collapsed && (
+                    <div
+                      className="p-1.5 space-y-1 bg-slate-950/20"
+                      onDragOver={(e) => {
+                        if (!dragSource || dragSource.kind !== 'step') return;
+                        if (blockStepsWithIndex.length === 0) {
+                          const target = computeBlockDropTarget(e, 'body');
+                          if (!target) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          e.dataTransfer.dropEffect = 'move';
+                          setDropIndicator(target);
+                        }
+                      }}
+                      onDrop={(e) => {
+                        if (!dragSource || dragSource.kind !== 'step') return;
+                        if (blockStepsWithIndex.length === 0) {
+                          const target = computeBlockDropTarget(e, 'body');
+                          if (!target) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          commitDrop(target);
+                        }
+                      }}
+                    >
+                      {blockStepsWithIndex.map(({ step, idx }) =>
+                        renderStepItem(step, idx, { scope: 'block', blockId: block.id })
+                      )}
+
+                      {blockStepsWithIndex.length === 0 && (
+                        <div className="p-3 text-center text-slate-500 text-[11px] italic">
+                          {isDropIntoBlock ? (
+                            <span className="text-sky-300 font-medium not-italic">
+                              Drop step here to add to module
+                            </span>
+                          ) : (
+                            <>
+                              No operations in this block yet.{' '}
+                              <button
+                                onClick={() => {
+                                  setAddPlacement({ mode: 'into-block', blockId: block.id });
+                                  setShowAddMenu(true);
+                                }}
+                                className="text-sky-400 hover:underline"
+                              >
+                                + Add Step
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {showBlockAfter && <DropLine />}
               </div>
             );
           });
         })()}
       </div>
 
-      {/* Add Step Action Button & Popover */}
+      {/* Add Step Action Buttons & Popover */}
       <div className="relative p-3 border-t border-slate-800 bg-slate-900">
-        <button
-          onClick={() => {
-            setTargetBlockForNewStep(null);
-            setShowAddMenu(!showAddMenu);
-          }}
-          className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs transition-colors shadow-lg shadow-sky-950/50 active:scale-95"
-        >
-          <Plus className="w-4 h-4" />
-          <span>{targetBlockForNewStep ? 'Add Step to Selected Block' : 'Add Fabrication Step'}</span>
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              if (showAddMenu && addPlacement.mode === 'after-selected') {
+                setShowAddMenu(false);
+              } else {
+                setAddPlacement({ mode: 'after-selected' });
+                setShowAddMenu(true);
+              }
+            }}
+            title={
+              activeStepIndex >= 0
+                ? `Insert a new fabrication step immediately after Step ${activeStepIndex + 1}`
+                : 'Insert a new fabrication step at the start of the flow (after Starting Substrate)'
+            }
+            className={`flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-[11px] font-medium transition-colors border active:scale-95 ${
+              showAddMenu && addPlacement.mode === 'after-selected'
+                ? 'bg-slate-800 border-sky-400 text-sky-300 ring-2 ring-sky-500/40'
+                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+            }`}
+          >
+            <Plus className="w-3.5 h-3.5 shrink-0 text-sky-400" />
+            <span className="truncate">
+              {activeStepIndex >= 0 ? `After Step ${activeStepIndex + 1}` : 'After Substrate'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (showAddMenu && addPlacement.mode === 'end') {
+                setShowAddMenu(false);
+              } else {
+                setAddPlacement({ mode: 'end' });
+                setShowAddMenu(true);
+              }
+            }}
+            title="Append a new fabrication step at the end of the process flow"
+            className={`flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-[11px] font-medium transition-colors shadow-lg shadow-sky-950/50 active:scale-95 ${
+              showAddMenu && addPlacement.mode === 'end'
+                ? 'bg-sky-500 text-white ring-2 ring-sky-300/60'
+                : 'bg-sky-600 hover:bg-sky-500 text-white'
+            }`}
+          >
+            <Plus className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Add at End</span>
+          </button>
+        </div>
 
         {showAddMenu && (
           <div className="absolute bottom-16 left-3 right-3 p-2 bg-slate-950 border border-slate-700 rounded-2xl shadow-2xl z-30 space-y-1 animate-in fade-in zoom-in-95 duration-100">
             <div className="flex items-center justify-between px-2 py-1">
               <span className="text-[10px] uppercase font-bold text-slate-400">
-                Choose Process Operation
+                {addPlacement.mode === 'after-selected'
+                  ? activeStepIndex >= 0
+                    ? `Insert After Step ${activeStepIndex + 1}`
+                    : 'Insert At Start (After Substrate)'
+                  : addPlacement.mode === 'into-block'
+                  ? `Add to ${
+                      blocks.find((b) => b.id === addPlacement.blockId)?.name || 'Block'
+                    }`
+                  : 'Add Step at End of Flow'}
               </span>
               <button
                 onClick={() => setShowAddMenu(false)}
@@ -873,7 +1342,7 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
             </div>
 
             <button
-              onClick={() => handleAddStep('deposition', targetBlockForNewStep)}
+              onClick={() => handleAddStep('deposition')}
               className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left hover:bg-slate-800 text-slate-200"
             >
               <Layers className="w-4 h-4 text-sky-400" />
@@ -883,7 +1352,7 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
               </div>
             </button>
             <button
-              onClick={() => handleAddStep('lithography', targetBlockForNewStep)}
+              onClick={() => handleAddStep('lithography')}
               className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left hover:bg-slate-800 text-slate-200"
             >
               <Scissors className="w-4 h-4 text-rose-400" />
@@ -893,7 +1362,7 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
               </div>
             </button>
             <button
-              onClick={() => handleAddStep('etch', targetBlockForNewStep)}
+              onClick={() => handleAddStep('etch')}
               className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left hover:bg-slate-800 text-slate-200"
             >
               <Flame className="w-4 h-4 text-amber-400" />
@@ -903,7 +1372,7 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
               </div>
             </button>
             <button
-              onClick={() => handleAddStep('liftoff', targetBlockForNewStep)}
+              onClick={() => handleAddStep('liftoff')}
               className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left hover:bg-slate-800 text-slate-200"
             >
               <Sparkles className="w-4 h-4 text-emerald-400" />
@@ -913,7 +1382,7 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
               </div>
             </button>
             <button
-              onClick={() => handleAddStep('strip', targetBlockForNewStep)}
+              onClick={() => handleAddStep('strip')}
               className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left hover:bg-slate-800 text-slate-200"
             >
               <Eraser className="w-4 h-4 text-teal-400" />
@@ -923,7 +1392,7 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
               </div>
             </button>
             <button
-              onClick={() => handleAddStep('cmp', targetBlockForNewStep)}
+              onClick={() => handleAddStep('cmp')}
               className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left hover:bg-slate-800 text-slate-200"
             >
               <Disc className="w-4 h-4 text-cyan-400" />
@@ -933,7 +1402,7 @@ export const ProcessFlowSidebar: React.FC<ProcessFlowSidebarProps> = ({
               </div>
             </button>
             <button
-              onClick={() => handleAddStep('bonding', targetBlockForNewStep)}
+              onClick={() => handleAddStep('bonding')}
               className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left hover:bg-slate-800 text-slate-200"
             >
               <Link2 className="w-4 h-4 text-indigo-400" />

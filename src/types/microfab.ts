@@ -53,6 +53,7 @@ export interface MaskWindow {
   id: string;
   xStart: number; // in nm
   xEnd: number;   // in nm
+  fixedWidth?: boolean;
 }
 
 export interface DepositionConfig {
@@ -60,6 +61,9 @@ export interface DepositionConfig {
   method: 'PECVD' | 'LPCVD' | 'ALD' | 'Sputter' | 'E-Beam Evaporation' | 'Thermal Oxidation' | 'Spin Coat' | 'Electroplating';
   thickness: number; // nm
   stepCoverage?: number; // 0 - 100%
+  tiltAngle?: number; // Substrate tilt in degrees (-75 to +75, 0 = normal incidence)
+  convexCornerEffect?: boolean; // Faster deposition around convex corners (bread-loafing)
+  convexCornerStrength?: number; // 0.2 - 1.5 (default 0.6 = +60% at sharp 90° convex corners)
 }
 
 export interface LithographyConfig {
@@ -91,12 +95,16 @@ export interface EtchConfig {
   depth: number; // nm
   targetMaterialId: string | 'all';
   isotropy: number; // 0 = perfectly anisotropic (vertical), 1 = fully isotropic (circular undercut)
-  sidewallAngle: number; // degrees, 50 to 90
+  sidewallAngle: number; // degrees, 80 to 100 for RIE/DRIE (54.74 for KOH)
   stopLayerMaterialId?: string; // stops etch when reaching this material
   scallopEffect?: boolean; // Bosch DRIE sidewall scallops
+  scallopDepth?: number; // Lateral scallop amplitude in nm (default 45 nm)
+  scallopPitch?: number; // Vertical Bosch cycle pitch in nm (default 200 nm)
   selectivityToMask?: number; // e.g. 20 (mask etches 20x slower)
   ardeEnabled?: boolean; // Aspect Ratio Dependent Etching (RIE Lag) for dry etching
   ardeStrength?: number; // Lag factor k (0.1 = mild to 1.0 = strong, default 0.5)
+  convexCornerEffect?: boolean; // Faster isotropic etching around convex corners
+  convexCornerStrength?: number; // 0.2 - 1.5 (default 0.6 = +60% at sharp 90° convex corners)
 }
 
 export interface StripConfig {
@@ -117,6 +125,7 @@ export interface BondingConfig {
   sourceType: 'custom-substrate' | 'imported-flow';
   bondingMethod: 'fusion' | 'anodic' | 'adhesive' | 'eutectic' | 'hybrid';
   incomingFace?: 'front' | 'back';
+  mirrorHorizontal?: boolean;
   customLayers?: SubstrateLayer[];
   importedFlow?: ProcessFlow;
   importedFlowTitle?: string;
@@ -208,6 +217,21 @@ export interface ColumnProfile {
   segments: MaterialSegment[];
 }
 
+export interface ScallopWall {
+  stepId: string;
+  targetSide: 'front' | 'back';
+  wallSide: 'left' | 'right';
+  colTop: number;
+  colBot: number;
+  xTop: number; // nm
+  xBot: number; // nm
+  yTop: number; // nm
+  yBot: number; // nm
+  scallopDepth: number; // nm
+  scallopPitch: number; // nm
+  isReentrant?: boolean;
+}
+
 export interface CrossSectionMesh {
   width: number; // nm
   minY: number;  // nm
@@ -218,6 +242,7 @@ export interface CrossSectionMesh {
     stepIndex: number;
     title: string;
   }[];
+  scallopWalls?: ScallopWall[];
 }
 
 export interface RenderedPolygon {

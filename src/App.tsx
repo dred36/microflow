@@ -74,6 +74,7 @@ export default function App() {
   // Panel visibility state for flexible layout and maximized wafer canvas
   const [leftSidebarOpen, setLeftSidebarOpen] = useState<boolean>(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState<boolean>(true);
+  const [isMaskTrackMinimized, setIsMaskTrackMinimized] = useState<boolean>(false);
 
   // Save to localStorage on changes
   useEffect(() => {
@@ -109,6 +110,9 @@ export default function App() {
   }, [isPlaying, flow.steps.length, playSpeed]);
 
   const handleTogglePlay = () => {
+    if (!isPlaying) {
+      setIsMaskTrackMinimized(true);
+    }
     if (!isPlaying && flow.steps.length > 0 && activeStepIndex >= flow.steps.length - 1) {
       setActiveStepIndex(0);
       setIsPlaying(true);
@@ -270,6 +274,8 @@ export default function App() {
                   setFocusMaskId(activeStep.lithography?.maskId);
                   setShowMaskLevels(true);
                 }}
+                isMinimized={isMaskTrackMinimized}
+                onToggleMinimize={() => setIsMaskTrackMinimized((prev) => !prev)}
               />
             </div>
           )}
@@ -281,6 +287,7 @@ export default function App() {
               polygons={activePolygons}
               materials={flow.materials}
               waferWidth={flow.substrateWidth}
+              flowId={flow.id}
               thicknessUnit={thicknessUnit}
               title={flow.title}
               stepNumber={isSubstrateActive ? 0 : activeStepIndex + 1}

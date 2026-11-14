@@ -399,6 +399,170 @@ export function moveBlockInTimeline(
   return rebuildFlowFromTimelineItems(flow, nextItems);
 }
 
+export type StepDropTarget =
+  | {
+      kind: 'timeline-item';
+      timelineIndex: number;
+      position: 'before' | 'after';
+    }
+  | {
+      kind: 'block-step';
+      blockId: string;
+      stepId: string;
+      position: 'before' | 'after';
+    }
+  | {
+      kind: 'into-block';
+      blockId: string;
+    };
+
+/**
+ * Moves an entire fabrication block to an arbitrary timeline position (before/after a timeline item)
+ * via drag-and-drop.
+ */
+export function reorderBlockInTimeline(
+  flow: ProcessFlow,
+  sourceBlockId: string,
+  targetTimelineIndex: number,
+  position: 'before' | 'after'
+): ProcessFlow {
+  const items = buildTimelineItems(flow);
+  const sourceIdx = items.findIndex(
+    (it) => it.kind === 'block' && it.block.id === sourceBlockId
+  );
+  if (sourceIdx < 0 || targetTimelineIndex < 0 || targetTimelineIndex >= items.length) {
+    return flow;
+  }
+
+  let insertIdx =
+    position === 'before' ? targetTimelineIndex : targetTimelineIndex + 1;
+  const nextItems = [...items];
+  const [moved] = nextItems.splice(sourceIdx, 1);
+  if (sourceIdx < insertIdx) {
+    insertIdx -= 1;
+  }
+  if (insertIdx === sourceIdx) {
+    return flow;
+  }
+
+  nextItems.splice(insertIdx, 0, moved);
+  return rebuildFlowFromTimelineItems(flow, nextItems);
+}
+
+/**
+ * Moves any step (ungrouped or within a block) to any target slot (within a block,
+ * into an empty/collapsed block, or ungrouped before/after any timeline item).
+ */
+export function reorderStepInTimeline(
+  flow: ProcessFlow,
+  sourceStepId: string,
+  target: StepDropTarget
+): ProcessFlow {
+  const norm = normalizeFlowBlocksOrder(flow);
+  const items = buildTimelineItems(norm);
+
+  if (target.kind === 'block-step' && target.stepId === sourceStepId) {
+    return norm;
+  }
+
+  let movedStep: ProcessStep | null = null;
+  let removedTopLevelIdx = -1;
+  let sourceBlockId: string | undefined;
+
+  const nextItems: TimelineItem[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === 'step') {
+      if (it.step.id === sourceStepId) {
+        movedStep = it.step;
+        removedTopLevelIdx = i;
+        continue;
+      }
+      nextItems.push(it);
+    } else {
+      const matchIdx = it.steps.findIndex((s) => s.step.id === sourceStepId);
+      if (matchIdx >= 0) {
+        movedStep = it.steps[matchIdx].step;
+        sourceBlockId = it.block.id;
+        const remaining = it.steps.filter((s) => s.step.id !== sourceStepId);
+        nextItems.push({
+          kind: 'block',
+          block: { ...it.block },
+          steps: remaining,
+        });
+      } else {
+        nextItems.push({
+          kind: 'block',
+          block: { ...it.block },
+          steps: [...it.steps],
+        });
+      }
+    }
+  }
+
+  if (!movedStep) return norm;
+
+  if (target.kind === 'into-block') {
+    if (sourceBlockId === target.blockId) return norm;
+    const blkIdx = nextItems.findIndex(
+      (it) => it.kind === 'block' && it.block.id === target.blockId
+    );
+    if (blkIdx < 0 || nextItems[blkIdx].kind !== 'block') return norm;
+    const blk = nextItems[blkIdx];
+    nextItems[blkIdx] = {
+      kind: 'block',
+      block: { ...blk.block, placeholderStepIndex: undefined },
+      steps: [
+        ...blk.steps,
+        { step: { ...movedStep, blockId: target.blockId }, idx: -1 },
+      ],
+    };
+    return rebuildFlowFromTimelineItems(norm, nextItems);
+  }
+
+  if (target.kind === 'block-step') {
+    const blkIdx = nextItems.findIndex(
+      (it) => it.kind === 'block' && it.block.id === target.blockId
+    );
+    if (blkIdx < 0 || nextItems[blkIdx].kind !== 'block') return norm;
+    const blk = nextItems[blkIdx];
+    const targetSubIdx = blk.steps.findIndex((s) => s.step.id === target.stepId);
+    if (targetSubIdx < 0) return norm;
+
+    const insertSubIdx =
+      target.position === 'before' ? targetSubIdx : targetSubIdx + 1;
+    const nextSteps = [...blk.steps];
+    nextSteps.splice(insertSubIdx, 0, {
+      step: { ...movedStep, blockId: target.blockId },
+      idx: -1,
+    });
+    nextItems[blkIdx] = {
+      kind: 'block',
+      block: { ...blk.block, placeholderStepIndex: undefined },
+      steps: nextSteps,
+    };
+    return rebuildFlowFromTimelineItems(norm, nextItems);
+  }
+
+  // target.kind === 'timeline-item' -> insert as ungrouped step
+  let insertIdx =
+    target.position === 'before'
+      ? target.timelineIndex
+      : target.timelineIndex + 1;
+  if (removedTopLevelIdx >= 0 && removedTopLevelIdx < insertIdx) {
+    insertIdx -= 1;
+  }
+  insertIdx = Math.max(0, Math.min(nextItems.length, insertIdx));
+
+  nextItems.splice(insertIdx, 0, {
+    kind: 'step',
+    step: { ...movedStep, blockId: undefined },
+    idx: -1,
+  });
+
+  return rebuildFlowFromTimelineItems(norm, nextItems);
+}
+
 /**
  * Moves a single step up or down:
  * - If first in a block and moved up -> removed from block and placed just in front of it.
@@ -618,6 +782,86 @@ export function insertStepIntoTimeline(
     flow: rebuilt,
     insertedIndex: insertedIndex >= 0 ? insertedIndex : rebuilt.steps.length - 1,
   };
+}
+
+/**
+ * Inserts a new step immediately after `afterStepIndex` (inheriting its block if it belongs to one),
+ * or at the very beginning of the flow when `afterStepIndex < 0` (e.g. Starting Substrate selected).
+ */
+export function insertStepAfterIndex(
+  flow: ProcessFlow,
+  newStep: ProcessStep,
+  afterStepIndex: number
+): { flow: ProcessFlow; insertedIndex: number } {
+  const norm = normalizeFlowBlocksOrder(flow);
+  const items = buildTimelineItems(norm);
+
+  if (afterStepIndex < 0 || norm.steps.length === 0) {
+    const nextItems: TimelineItem[] = [
+      { kind: 'step', step: { ...newStep, blockId: undefined }, idx: -1 },
+      ...items,
+    ];
+    const rebuilt = rebuildFlowFromTimelineItems(norm, nextItems);
+    const insertedIndex = rebuilt.steps.findIndex((s) => s.id === newStep.id);
+    return {
+      flow: rebuilt,
+      insertedIndex: insertedIndex >= 0 ? insertedIndex : 0,
+    };
+  }
+
+  const clampedIdx = Math.min(afterStepIndex, norm.steps.length - 1);
+  const anchorStep = norm.steps[clampedIdx];
+  if (!anchorStep) {
+    return insertStepIntoTimeline(norm, newStep, null);
+  }
+
+  const nextItems = items.map((it) =>
+    it.kind === 'block'
+      ? { ...it, block: { ...it.block }, steps: [...it.steps] }
+      : it
+  );
+
+  if (anchorStep.blockId) {
+    const blkIdx = nextItems.findIndex(
+      (it) => it.kind === 'block' && it.block.id === anchorStep.blockId
+    );
+    if (blkIdx >= 0 && nextItems[blkIdx].kind === 'block') {
+      const blkItem = nextItems[blkIdx];
+      const subIdx = blkItem.steps.findIndex((s) => s.step.id === anchorStep.id);
+      const insertSubPos = subIdx >= 0 ? subIdx + 1 : blkItem.steps.length;
+      blkItem.steps.splice(insertSubPos, 0, {
+        step: { ...newStep, blockId: anchorStep.blockId },
+        idx: -1,
+      });
+      blkItem.block.placeholderStepIndex = undefined;
+
+      const rebuilt = rebuildFlowFromTimelineItems(norm, nextItems);
+      const insertedIndex = rebuilt.steps.findIndex((s) => s.id === newStep.id);
+      return {
+        flow: rebuilt,
+        insertedIndex: insertedIndex >= 0 ? insertedIndex : clampedIdx + 1,
+      };
+    }
+  }
+
+  const itemIdx = nextItems.findIndex(
+    (it) => it.kind === 'step' && it.step.id === anchorStep.id
+  );
+  if (itemIdx >= 0) {
+    nextItems.splice(itemIdx + 1, 0, {
+      kind: 'step',
+      step: { ...newStep, blockId: undefined },
+      idx: -1,
+    });
+    const rebuilt = rebuildFlowFromTimelineItems(norm, nextItems);
+    const insertedIndex = rebuilt.steps.findIndex((s) => s.id === newStep.id);
+    return {
+      flow: rebuilt,
+      insertedIndex: insertedIndex >= 0 ? insertedIndex : clampedIdx + 1,
+    };
+  }
+
+  return insertStepIntoTimeline(norm, newStep, null);
 }
 
 /**

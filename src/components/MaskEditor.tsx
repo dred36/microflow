@@ -5,13 +5,15 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { MaskWindow, ProcessStep } from '../types/microfab';
-import { Plus, Trash2, ArrowLeftRight, MoveHorizontal, GripVertical, Scan, Edit2, Check } from 'lucide-react';
+import { Plus, Trash2, ArrowLeftRight, MoveHorizontal, GripVertical, Scan, Edit2, Check, Lock, Unlock, ChevronUp, ChevronDown } from 'lucide-react';
 
 interface MaskEditorProps {
   step: ProcessStep;
   waferWidth: number; // in nm
   onUpdateStep: (updated: ProcessStep) => void;
   onOpenMaskLevels?: () => void;
+  isMinimized?: boolean;
+  onToggleMinimize?: () => void;
 }
 
 interface DragState {
@@ -22,11 +24,94 @@ interface DragState {
   initialXEnd: number;
 }
 
+interface UmInputProps {
+  valueNm: number;
+  minNm?: number;
+  maxNm: number;
+  stepUm?: string;
+  disabled?: boolean;
+  onCommitNm: (valNm: number) => void;
+  title?: string;
+  className?: string;
+}
+
+const UmNumberInput: React.FC<UmInputProps> = ({
+  valueNm,
+  minNm = 0,
+  maxNm,
+  stepUm = '0.05',
+  disabled = false,
+  onCommitNm,
+  title,
+  className,
+}) => {
+  const formatted = (valueNm / 1000).toFixed(2);
+  const [isFocused, setIsFocused] = useState(false);
+  const [draft, setDraft] = useState(formatted);
+
+  useEffect(() => {
+    if (!isFocused) {
+      setDraft(formatted);
+    }
+  }, [formatted, isFocused]);
+
+  return (
+    <input
+      type="number"
+      step={stepUm}
+      min={(minNm / 1000).toFixed(2)}
+      max={(maxNm / 1000).toFixed(2)}
+      disabled={disabled}
+      value={isFocused ? draft : formatted}
+      title={title}
+      onFocus={(e) => {
+        if (disabled) return;
+        setIsFocused(true);
+        setDraft(formatted);
+        e.target.select();
+      }}
+      onChange={(e) => {
+        if (disabled) return;
+        const raw = e.target.value;
+        setDraft(raw);
+        const parsed = parseFloat(raw);
+        if (Number.isFinite(parsed) && parsed >= minNm / 1000) {
+          onCommitNm(parsed * 1000);
+        }
+      }}
+      onBlur={() => {
+        const parsed = parseFloat(draft);
+        if (Number.isFinite(parsed)) {
+          onCommitNm(Math.max(minNm, Math.min(maxNm, parsed * 1000)));
+        }
+        setIsFocused(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          (e.target as HTMLInputElement).blur();
+        } else if (e.key === 'Escape') {
+          setDraft(formatted);
+          setIsFocused(false);
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className={
+        className ||
+        `w-16 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-100 text-right focus:outline-none focus:border-sky-500 ${
+          disabled ? 'opacity-50 cursor-not-allowed text-slate-400' : ''
+        }`
+      }
+    />
+  );
+};
+
 export const MaskEditor: React.FC<MaskEditorProps> = ({
   step,
   waferWidth,
   onUpdateStep,
   onOpenMaskLevels,
+  isMinimized: isMinimizedProp,
+  onToggleMinimize,
 }) => {
   const litho = step.lithography;
   if (!litho) return null;
@@ -36,6 +121,11 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [isEditingMaskName, setIsEditingMaskName] = useState<boolean>(false);
   const [editingMaskName, setEditingMaskName] = useState<string>(litho.maskName || '');
+  const [internalMinimized, setInternalMinimized] = useState<boolean>(false);
+
+  const isMinimized = isMinimizedProp ?? internalMinimized;
+  const handleToggleMinimize =
+    onToggleMinimize ?? (() => setInternalMinimized((prev) => !prev));
 
   useEffect(() => {
     setIsEditingMaskName(false);
@@ -97,20 +187,85 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
     field: 'xStart' | 'xEnd',
     val: number
   ) => {
-    const clamped = Math.max(0, Math.min(waferWidth, val));
+    const roundedVal = Math.round(val);
     const updatedLitho = {
       ...litho,
       windows: windows.map((w) => {
-        if (w.id === id) {
-          const updated = { ...w, [field]: clamped };
-          // Ensure start <= end
-          if (updated.xStart > updated.xEnd) {
-            if (field === 'xStart') updated.xEnd = updated.xStart;
-            else updated.xStart = updated.xEnd;
+        if (w.id !== id) return w;
+
+        if (w.fixedWidth) {
+          const width = Math.max(10, w.xEnd - w.xStart);
+          if (field === 'xStart') {
+            const nextStart = Math.max(0, Math.min(waferWidth - width, roundedVal));
+            return {
+              ...w,
+              xStart: nextStart,
+              xEnd: nextStart + width,
+            };
+          } else {
+            const nextEnd = Math.max(width, Math.min(waferWidth, roundedVal));
+            return {
+              ...w,
+              xStart: nextEnd - width,
+              xEnd: nextEnd,
+            };
           }
-          return updated;
         }
-        return w;
+
+        const clamped = Math.max(0, Math.min(waferWidth, roundedVal));
+        const updated = { ...w, [field]: clamped };
+        // Ensure start <= end when unlocked
+        if (updated.xStart > updated.xEnd) {
+          if (field === 'xStart') updated.xEnd = updated.xStart;
+          else updated.xStart = updated.xEnd;
+        }
+        return updated;
+      }),
+    };
+    onUpdateStep({
+      ...step,
+      lithography: updatedLitho,
+    });
+  };
+
+  const handleToggleFixedWidth = (id: string) => {
+    const updatedLitho = {
+      ...litho,
+      windows: windows.map((w) =>
+        w.id === id ? { ...w, fixedWidth: !w.fixedWidth } : w
+      ),
+    };
+    onUpdateStep({
+      ...step,
+      lithography: updatedLitho,
+    });
+  };
+
+  const handleUpdateWindowWidth = (id: string, targetWidthNm: number) => {
+    const clampedWidth = Math.max(10, Math.min(waferWidth, Math.round(targetWidthNm)));
+    const updatedLitho = {
+      ...litho,
+      windows: windows.map((w) => {
+        if (w.id !== id || w.fixedWidth) return w;
+        const center = (w.xStart + w.xEnd) / 2;
+        const half = clampedWidth / 2;
+        let nextStart = center - half;
+        let nextEnd = center + half;
+
+        // Keep requested width within wafer bounds if expanding past edge
+        if (nextStart < 0) {
+          nextStart = 0;
+          nextEnd = Math.min(waferWidth, clampedWidth);
+        } else if (nextEnd > waferWidth) {
+          nextEnd = waferWidth;
+          nextStart = Math.max(0, waferWidth - clampedWidth);
+        }
+
+        return {
+          ...w,
+          xStart: Math.round(nextStart),
+          xEnd: Math.round(nextEnd),
+        };
       }),
     };
     onUpdateStep({
@@ -214,6 +369,60 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
     }
   };
 
+  if (isMinimized) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-slate-200 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-semibold tracking-wider uppercase text-sky-400 shrink-0">
+            Photomask Aperture Track
+          </span>
+          {step.side === 'back' && (
+            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-semibold shrink-0">
+              Backside
+            </span>
+          )}
+          {step.side === 'both' && (
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[10px] font-semibold shrink-0">
+              Both Sides
+            </span>
+          )}
+          <span className="text-xs text-slate-600 shrink-0">·</span>
+          <span className="text-xs text-slate-300 font-mono truncate">
+            {litho.maskName || 'Photomask Layer'}
+          </span>
+          <span className="text-xs text-slate-600 shrink-0 hidden sm:inline">·</span>
+          <span className="text-[11px] font-mono text-slate-400 shrink-0 hidden sm:inline">
+            <span className="capitalize text-slate-200">{litho.polarity}</span> · {windows.length}{' '}
+            {windows.length === 1 ? 'aperture' : 'apertures'}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onOpenMaskLevels && (
+            <button
+              type="button"
+              onClick={onOpenMaskLevels}
+              className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 border border-slate-700 transition-colors"
+              title="Open Photolithography Mask Levels Panel"
+            >
+              <Scan className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Mask Levels</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleToggleMinimize}
+            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+            title="Expand Photomask Aperture Track"
+          >
+            <ChevronDown className="w-3.5 h-3.5 text-sky-400" />
+            <span>Expand</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-200">
       <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
@@ -312,6 +521,16 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
               <span>Mask Levels</span>
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={handleToggleMinimize}
+            className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors"
+            title="Minimize Photomask Aperture Track to maximize cross-section view"
+          >
+            <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+            <span className="hidden xl:inline">Minimize</span>
+          </button>
         </div>
       </div>
 
@@ -366,35 +585,47 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
                   width: `${widthPct}%`,
                 }}
               >
-                {/* Left Resize Handle */}
-                <div
-                  onPointerDown={(e) => handlePointerDown(e, win, 'resize-start')}
-                  className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center bg-amber-500/80 hover:bg-amber-400 text-slate-950 z-20 transition-all select-none group/left"
-                  title="Drag to resize aperture left boundary"
-                >
-                  <div className="w-1 h-5 rounded-full bg-slate-950/70" />
-                </div>
+                {/* Left Resize Handle (disabled when width is fixed) */}
+                {!win.fixedWidth && (
+                  <div
+                    onPointerDown={(e) => handlePointerDown(e, win, 'resize-start')}
+                    className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center bg-amber-500/80 hover:bg-amber-400 text-slate-950 z-20 transition-all select-none group/left"
+                    title="Drag to resize aperture left boundary"
+                  >
+                    <div className="w-1 h-5 rounded-full bg-slate-950/70" />
+                  </div>
+                )}
 
                 {/* Central Drag & Slide Area */}
                 <div
                   onPointerDown={(e) => handlePointerDown(e, win, 'move')}
                   className="w-full h-full flex items-center justify-center cursor-grab active:cursor-grabbing px-3 overflow-hidden select-none"
-                  title="Click and drag to slide aperture"
+                  title={
+                    win.fixedWidth
+                      ? 'Width locked — drag to slide aperture'
+                      : 'Click and drag to slide aperture'
+                  }
                 >
                   <div className="flex items-center gap-1 text-[11px] font-mono font-bold text-white drop-shadow truncate select-none pointer-events-none">
-                    <MoveHorizontal className="w-3 h-3 text-amber-300 flex-shrink-0" />
+                    {win.fixedWidth ? (
+                      <Lock className="w-3 h-3 text-amber-300 flex-shrink-0" />
+                    ) : (
+                      <MoveHorizontal className="w-3 h-3 text-amber-300 flex-shrink-0" />
+                    )}
                     <span>{((win.xEnd - win.xStart) / 1000).toFixed(2)} µm</span>
                   </div>
                 </div>
 
-                {/* Right Resize Handle */}
-                <div
-                  onPointerDown={(e) => handlePointerDown(e, win, 'resize-end')}
-                  className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center bg-amber-500/80 hover:bg-amber-400 text-slate-950 z-20 transition-all select-none group/right"
-                  title="Drag to resize aperture right boundary"
-                >
-                  <div className="w-1 h-5 rounded-full bg-slate-950/70" />
-                </div>
+                {/* Right Resize Handle (disabled when width is fixed) */}
+                {!win.fixedWidth && (
+                  <div
+                    onPointerDown={(e) => handlePointerDown(e, win, 'resize-end')}
+                    className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center bg-amber-500/80 hover:bg-amber-400 text-slate-950 z-20 transition-all select-none group/right"
+                    title="Drag to resize aperture right boundary"
+                  >
+                    <div className="w-1 h-5 rounded-full bg-slate-950/70" />
+                  </div>
+                )}
               </div>
             );
           })}
@@ -406,15 +637,14 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
         <div className="mt-3 space-y-1.5 max-h-36 overflow-y-auto pr-1">
           {windows.map((win, idx) => {
             const isSelected = activeWindowId === win.id;
-            const startUm = (win.xStart / 1000).toFixed(2);
-            const endUm = (win.xEnd / 1000).toFixed(2);
-            const widthUm = ((win.xEnd - win.xStart) / 1000).toFixed(2);
+            const winWidth = Math.max(10, win.xEnd - win.xStart);
+            const isFixed = Boolean(win.fixedWidth);
 
             return (
               <div
                 key={win.id}
                 onClick={() => setActiveWindowId(win.id)}
-                className={`flex items-center justify-between p-2 rounded-lg text-xs transition-colors ${
+                className={`flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg text-xs transition-colors ${
                   isSelected
                     ? 'bg-slate-800/90 border border-sky-500/50'
                     : 'bg-slate-950/60 border border-slate-800/80 hover:bg-slate-800/40'
@@ -425,42 +655,77 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
                     {idx + 1}
                   </span>
                   <span className="font-medium text-slate-300">Aperture #{idx + 1}</span>
-                  <span className="text-[11px] text-slate-500 font-mono">
-                    (Width: {widthUm} µm)
-                  </span>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1 font-mono text-[11px]">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div
+                    className="flex items-center gap-1 font-mono text-[11px]"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span className="text-sky-400">W:</span>
+                    <UmNumberInput
+                      valueNm={winWidth}
+                      minNm={10}
+                      maxNm={waferWidth}
+                      disabled={isFixed}
+                      onCommitNm={(valNm) => handleUpdateWindowWidth(win.id, valNm)}
+                      title={
+                        isFixed
+                          ? 'Width is fixed (click Fix Width toggle to unlock)'
+                          : 'Edit aperture width (keeps window centered)'
+                      }
+                    />
+                    <span className="text-slate-500">µm</span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleFixedWidth(win.id)}
+                      className={`ml-1 flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-sans font-medium transition-colors ${
+                        isFixed
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 hover:bg-amber-500/30'
+                          : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-slate-200 hover:border-slate-600'
+                      }`}
+                      title={
+                        isFixed
+                          ? 'Width Fixed: editing X start or X end slides the window without changing width'
+                          : 'Fix Width: lock width so editing X start or X end moves the window cleanly'
+                      }
+                    >
+                      {isFixed ? (
+                        <Lock className="w-3 h-3 shrink-0" />
+                      ) : (
+                        <Unlock className="w-3 h-3 shrink-0" />
+                      )}
+                      <span>{isFixed ? 'Width Fixed' : 'Fix Width'}</span>
+                    </button>
+                  </div>
+
+                  <div
+                    className="flex items-center gap-1 font-mono text-[11px]"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <span className="text-slate-400">X:</span>
-                    <input
-                      type="number"
-                      step="0.05"
-                      min="0"
-                      max={(waferWidth / 1000).toFixed(2)}
-                      value={startUm}
-                      onChange={(e) =>
-                        handleUpdateWindowCoord(
-                          win.id,
-                          'xStart',
-                          parseFloat(e.target.value || '0') * 1000
-                        )
+                    <UmNumberInput
+                      valueNm={win.xStart}
+                      minNm={0}
+                      maxNm={isFixed ? Math.max(0, waferWidth - winWidth) : waferWidth}
+                      onCommitNm={(valNm) => handleUpdateWindowCoord(win.id, 'xStart', valNm)}
+                      title={
+                        isFixed
+                          ? 'Edit start X (slides window with fixed width)'
+                          : 'Edit aperture start X'
                       }
                       className="w-14 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-100 text-right focus:outline-none focus:border-sky-500"
                     />
                     <span className="text-slate-500">→</span>
-                    <input
-                      type="number"
-                      step="0.05"
-                      min="0"
-                      max={(waferWidth / 1000).toFixed(2)}
-                      value={endUm}
-                      onChange={(e) =>
-                        handleUpdateWindowCoord(
-                          win.id,
-                          'xEnd',
-                          parseFloat(e.target.value || '0') * 1000
-                        )
+                    <UmNumberInput
+                      valueNm={win.xEnd}
+                      minNm={isFixed ? winWidth : 0}
+                      maxNm={waferWidth}
+                      onCommitNm={(valNm) => handleUpdateWindowCoord(win.id, 'xEnd', valNm)}
+                      title={
+                        isFixed
+                          ? 'Edit end X (slides window with fixed width)'
+                          : 'Edit aperture end X'
                       }
                       className="w-14 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-100 text-right focus:outline-none focus:border-sky-500"
                     />

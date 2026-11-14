@@ -17,7 +17,7 @@ import {
   PhotomaskLevel,
   BondingConfig,
 } from '../types/microfab';
-import { ThicknessUnit, getUnitLabel } from '../lib/units';
+import { ThicknessUnit, getUnitLabel, formatThickness } from '../lib/units';
 import { ThicknessInput } from './ThicknessInput';
 import {
   Layers,
@@ -44,6 +44,7 @@ import {
   Link2,
   Upload,
   FileCheck,
+  FlipHorizontal2,
 } from 'lucide-react';
 
 interface StepEditorProps {
@@ -467,11 +468,93 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
                   >
                     <option value="conformal">Conformal (Uniform sidewalls & top)</option>
-                    <option value="directional">Directional (Line-of-sight top only, E-Beam)</option>
+                    <option value="directional">Directional (Line-of-sight, E-Beam)</option>
                     <option value="semi-conformal">Semi-Conformal (Custom sidewall coverage)</option>
                     <option value="spin-coat">Planarizing Spin-Coat (Fills valleys flat)</option>
                   </select>
                 </div>
+
+                {step.deposition?.depositionType === 'directional' && (
+                  <div className="pt-2.5 border-t border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-slate-300 font-medium">
+                        Substrate Tilt Angle
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {(step.deposition?.tiltAngle ?? 0) !== 0 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleUpdate({
+                                deposition: {
+                                  ...step.deposition!,
+                                  tiltAngle: 0,
+                                },
+                              })
+                            }
+                            className="text-[10px] text-slate-400 hover:text-sky-400 underline"
+                          >
+                            Reset 0°
+                          </button>
+                        )}
+                        <span className="font-mono text-sky-400">
+                          {(step.deposition?.tiltAngle ?? 0) > 0
+                            ? `+${step.deposition?.tiltAngle}°`
+                            : `${step.deposition?.tiltAngle ?? 0}°`}
+                        </span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="-75"
+                      max="75"
+                      step="1"
+                      value={step.deposition?.tiltAngle ?? 0}
+                      onChange={(e) =>
+                        handleUpdate({
+                          deposition: {
+                            ...step.deposition!,
+                            tiltAngle: parseInt(e.target.value, 10),
+                          },
+                        })
+                      }
+                      className="w-full accent-sky-500"
+                    />
+                    <div className="flex items-center justify-between gap-1">
+                      {[-45, -30, 0, 30, 45].map((presetDeg) => {
+                        const active = (step.deposition?.tiltAngle ?? 0) === presetDeg;
+                        return (
+                          <button
+                            key={presetDeg}
+                            type="button"
+                            onClick={() =>
+                              handleUpdate({
+                                deposition: {
+                                  ...step.deposition!,
+                                  tiltAngle: presetDeg,
+                                },
+                              })
+                            }
+                            className={`flex-1 py-1 rounded text-[10px] font-mono border transition-colors ${
+                              active
+                                ? 'bg-sky-500/20 border-sky-500/60 text-sky-300'
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                            }`}
+                          >
+                            {presetDeg > 0 ? `+${presetDeg}°` : `${presetDeg}°`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-snug">
+                      {(step.deposition?.tiltAngle ?? 0) === 0
+                        ? 'Normal incidence (vertical flux only, no sidewall coating).'
+                        : (step.deposition?.tiltAngle ?? 0) > 0
+                        ? 'Flux arrives from upper-right (+X): coats right-facing walls and casts shadows left.'
+                        : 'Flux arrives from upper-left (-X): coats left-facing walls and casts shadows right.'}
+                    </p>
+                  </div>
+                )}
 
                 {step.deposition?.depositionType === 'semi-conformal' && (
                   <div>
@@ -496,6 +579,73 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       }
                       className="w-full accent-sky-500"
                     />
+                  </div>
+                )}
+
+                {((step.deposition?.depositionType || 'conformal') === 'conformal' ||
+                  step.deposition?.depositionType === 'semi-conformal') && (
+                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(step.deposition?.convexCornerEffect)}
+                        onChange={(e) =>
+                          handleUpdate({
+                            deposition: {
+                              ...(step.deposition || {
+                                depositionType: 'conformal',
+                                method: 'PECVD',
+                                thickness: step.thickness || 200,
+                              }),
+                              convexCornerEffect: e.target.checked,
+                              convexCornerStrength:
+                                step.deposition?.convexCornerStrength ?? 0.6,
+                            },
+                          })
+                        }
+                        className="mt-0.5 rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0"
+                      />
+                      <div>
+                        <span className="text-[11px] font-medium text-slate-200 block">
+                          Faster Deposition at Convex Corners
+                        </span>
+                        <span className="text-[10px] text-slate-400 leading-snug block">
+                          Outer/convex step corners receive wider precursor flux and build thicker film (bread-loafing).
+                        </span>
+                      </div>
+                    </label>
+
+                    {step.deposition?.convexCornerEffect && (
+                      <div>
+                        <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                          <span>Corner Rate Boost</span>
+                          <span className="font-mono text-sky-400">
+                            +{Math.round((step.deposition?.convexCornerStrength ?? 0.6) * 100)}%{' '}
+                            {(step.deposition?.convexCornerStrength ?? 0.6) < 0.4
+                              ? '(Mild)'
+                              : (step.deposition?.convexCornerStrength ?? 0.6) > 0.9
+                              ? '(Strong)'
+                              : '(Moderate)'}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="20"
+                          max="150"
+                          step="5"
+                          value={Math.round((step.deposition?.convexCornerStrength ?? 0.6) * 100)}
+                          onChange={(e) =>
+                            handleUpdate({
+                              deposition: {
+                                ...step.deposition!,
+                                convexCornerStrength: parseInt(e.target.value) / 100,
+                              },
+                            })
+                          }
+                          className="w-full accent-sky-500"
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -845,6 +995,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 ? 90
                                 : step.etch?.sidewallAngle ?? 90,
                             scallopEffect: nextEtchType === 'drie-bosch',
+                            scallopDepth:
+                              nextEtchType === 'drie-bosch'
+                                ? step.etch?.scallopDepth ?? 45
+                                : step.etch?.scallopDepth,
+                            scallopPitch:
+                              nextEtchType === 'drie-bosch'
+                                ? step.etch?.scallopPitch ?? 200
+                                : step.etch?.scallopPitch,
                           },
                         });
                       }}
@@ -893,20 +1051,38 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 <div>
                   <div className="flex justify-between text-[11px] text-slate-400 mb-1">
                     <span>Etch Isotropy (Mask Undercut)</span>
-                    <span className="font-mono text-amber-400">
-                      {Math.round((step.etch?.isotropy ?? 0.05) * 100)}%{' '}
-                      {(step.etch?.isotropy ?? 0.05) < 0.1
-                        ? '(Anisotropic Vertical)'
-                        : (step.etch?.isotropy ?? 0.05) > 0.7
-                        ? '(Isotropic Circular Undercut)'
-                        : '(Moderate Undercut)'}
-                    </span>
+                    {(() => {
+                      const isoVal =
+                        step.etch?.isotropy ??
+                        (step.etch?.etchType === 'wet-isotropic' ? 0.95 : 0.05);
+                      const isKoh = step.etch?.etchType === 'wet-koh';
+                      const angleLabel = `${step.etch?.sidewallAngle ?? 54.74}°`;
+                      return (
+                        <span className="font-mono text-amber-400">
+                          {Math.round(isoVal * 100)}%{' '}
+                          {isKoh
+                            ? isoVal < 0.05
+                              ? `(${angleLabel} Zero Undercut)`
+                              : isoVal > 0.7
+                              ? `(${angleLabel} High Lateral Undercut)`
+                              : `(${angleLabel} Lateral Undercut)`
+                            : isoVal < 0.1
+                            ? '(Anisotropic Vertical)'
+                            : isoVal > 0.7
+                            ? '(Isotropic Circular Undercut)'
+                            : '(Moderate Undercut)'}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <input
                     type="range"
                     min="0"
                     max="100"
-                    value={Math.round((step.etch?.isotropy ?? 0.05) * 100)}
+                    value={Math.round(
+                      (step.etch?.isotropy ??
+                        (step.etch?.etchType === 'wet-isotropic' ? 0.95 : 0.05)) * 100
+                    )}
                     onChange={(e) =>
                       handleUpdate({
                         etch: {
@@ -918,6 +1094,176 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     className="w-full accent-amber-500"
                   />
                 </div>
+
+                {/* Sidewall Taper Angle for RIE and DRIE */}
+                {(['rie', 'drie-bosch'].includes(step.etch?.etchType || 'rie')) && (
+                  <div className="pt-2.5 border-t border-slate-800 space-y-2">
+                    <div className="flex justify-between text-[11px] text-slate-400">
+                      <span>Sidewall Taper Angle</span>
+                      {(() => {
+                        const angleVal = step.etch?.sidewallAngle ?? 90;
+                        return (
+                          <span className="font-mono text-amber-400">
+                            {angleVal}°{' '}
+                            {angleVal > 90.25
+                              ? `(${+(angleVal - 90).toFixed(1)}° Re-entrant)`
+                              : angleVal < 89.75
+                              ? `(${+(90 - angleVal).toFixed(1)}° Positive Taper)`
+                              : '(Vertical 90°)'}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                    <input
+                      type="range"
+                      min="80"
+                      max="100"
+                      step="0.5"
+                      value={Math.max(80, Math.min(100, step.etch?.sidewallAngle ?? 90))}
+                      onChange={(e) =>
+                        handleUpdate({
+                          etch: {
+                            ...(step.etch || {
+                              etchType: 'rie',
+                              depth: step.thickness || 300,
+                              targetMaterialId: 'all',
+                              isotropy: 0.05,
+                              sidewallAngle: 90,
+                            }),
+                            sidewallAngle: parseFloat(e.target.value),
+                          },
+                        })
+                      }
+                      className="w-full accent-amber-500"
+                    />
+                    <div className="flex items-center justify-between gap-1">
+                      {[80, 85, 88, 90, 95, 100].map((presetAngle) => {
+                        const active =
+                          Math.abs((step.etch?.sidewallAngle ?? 90) - presetAngle) < 0.25;
+                        return (
+                          <button
+                            key={presetAngle}
+                            type="button"
+                            onClick={() =>
+                              handleUpdate({
+                                etch: {
+                                  ...(step.etch || {
+                                    etchType: 'rie',
+                                    depth: step.thickness || 300,
+                                    targetMaterialId: 'all',
+                                    isotropy: 0.05,
+                                    sidewallAngle: 90,
+                                  }),
+                                  sidewallAngle: presetAngle,
+                                },
+                              })
+                            }
+                            className={`flex-1 py-1 rounded text-[10px] font-mono border transition-colors ${
+                              active
+                                ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                            }`}
+                          >
+                            {presetAngle}°
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Adjustable Bosch DRIE Sidewall Scallops */}
+                {step.etch?.etchType === 'drie-bosch' && (
+                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(step.etch?.scallopEffect)}
+                        onChange={(e) =>
+                          handleUpdate({
+                            etch: {
+                              ...step.etch!,
+                              scallopEffect: e.target.checked,
+                              scallopDepth: step.etch?.scallopDepth ?? 45,
+                              scallopPitch: step.etch?.scallopPitch ?? 200,
+                            },
+                          })
+                        }
+                        className="mt-0.5 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0"
+                      />
+                      <div>
+                        <span className="text-[11px] font-medium text-slate-200 block">
+                          Bosch DRIE Sidewall Scallops
+                        </span>
+                        <span className="text-[10px] text-slate-400 leading-snug block">
+                          Periodic SF₆/C₄F₈ etch-passivation undulations along etched trench walls.
+                        </span>
+                      </div>
+                    </label>
+
+                    {step.etch?.scallopEffect && (
+                      <div className="space-y-2.5 pl-1">
+                        <div>
+                          <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                            <span>Scallop Depth (Amplitude)</span>
+                            <span className="font-mono text-amber-400">
+                              {formatThickness(step.etch?.scallopDepth ?? 45, thicknessUnit)}
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min="10"
+                            max="250"
+                            step="5"
+                            value={step.etch?.scallopDepth ?? 45}
+                            onChange={(e) =>
+                              handleUpdate({
+                                etch: {
+                                  ...step.etch!,
+                                  scallopDepth: parseInt(e.target.value, 10),
+                                },
+                              })
+                            }
+                            className="w-full accent-amber-500"
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                            <span>Scallop Pitch (Cycle Height)</span>
+                            <span className="font-mono text-amber-400">
+                              {formatThickness(step.etch?.scallopPitch ?? 200, thicknessUnit)} (~
+                              {Math.max(
+                                1,
+                                Math.round(
+                                  (step.etch?.depth ?? step.thickness ?? 300) /
+                                    Math.max(20, step.etch?.scallopPitch ?? 200)
+                                )
+                              )}{' '}
+                              cycles)
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min="60"
+                            max="600"
+                            step="10"
+                            value={step.etch?.scallopPitch ?? 200}
+                            onChange={(e) =>
+                              handleUpdate({
+                                etch: {
+                                  ...step.etch!,
+                                  scallopPitch: parseInt(e.target.value, 10),
+                                },
+                              })
+                            }
+                            className="w-full accent-amber-500"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-[11px] text-slate-400 mb-1">
@@ -1004,6 +1350,76 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               etch: {
                                 ...step.etch!,
                                 ardeStrength: parseInt(e.target.value) / 100,
+                              },
+                            })
+                          }
+                          className="w-full accent-amber-500"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Convex Corner Acceleration for Isotropic Etching */}
+                {(step.etch?.etchType === 'wet-isotropic' ||
+                  (step.etch?.isotropy ?? 0.05) >= 0.15) && (
+                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(step.etch?.convexCornerEffect)}
+                        onChange={(e) =>
+                          handleUpdate({
+                            etch: {
+                              ...(step.etch || {
+                                etchType: 'wet-isotropic',
+                                depth: step.thickness || 300,
+                                targetMaterialId: 'all',
+                                isotropy: 0.95,
+                                sidewallAngle: 90,
+                              }),
+                              convexCornerEffect: e.target.checked,
+                              convexCornerStrength:
+                                step.etch?.convexCornerStrength ?? 0.6,
+                            },
+                          })
+                        }
+                        className="mt-0.5 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0"
+                      />
+                      <div>
+                        <span className="text-[11px] font-medium text-slate-200 block">
+                          Faster Etch at Convex Corners
+                        </span>
+                        <span className="text-[10px] text-slate-400 leading-snug block">
+                          Convex corners exposed to wider etchant solid angle etch faster, rounding sharp step edges.
+                        </span>
+                      </div>
+                    </label>
+
+                    {step.etch?.convexCornerEffect && (
+                      <div>
+                        <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                          <span>Corner Rate Boost</span>
+                          <span className="font-mono text-amber-400">
+                            +{Math.round((step.etch?.convexCornerStrength ?? 0.6) * 100)}%{' '}
+                            {(step.etch?.convexCornerStrength ?? 0.6) < 0.4
+                              ? '(Mild)'
+                              : (step.etch?.convexCornerStrength ?? 0.6) > 0.9
+                              ? '(Strong)'
+                              : '(Moderate)'}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="20"
+                          max="150"
+                          step="5"
+                          value={Math.round((step.etch?.convexCornerStrength ?? 0.6) * 100)}
+                          onChange={(e) =>
+                            handleUpdate({
+                              etch: {
+                                ...step.etch!,
+                                convexCornerStrength: parseInt(e.target.value) / 100,
                               },
                             })
                           }
@@ -1581,6 +1997,26 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           Upload an exported MicroFlow <span className="font-mono">.json</span> process file. All its enabled fabrication steps will be simulated and bonded onto the selected side.
                         </p>
                       )}
+
+                      <label className="flex items-start gap-2 pt-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(bondCfg.mirrorHorizontal)}
+                          onChange={(e) =>
+                            updateBonding({ mirrorHorizontal: e.target.checked })
+                          }
+                          className="mt-0.5 rounded bg-slate-800 border-slate-700 text-indigo-500 focus:ring-0"
+                        />
+                        <div>
+                          <span className="text-[11px] font-medium text-slate-200 flex items-center gap-1.5">
+                            <FlipHorizontal2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                            <span>Mirror Pre-Processed Substrate (Left ↔ Right)</span>
+                          </span>
+                          <span className="text-[10px] text-slate-400 leading-snug block">
+                            Mirrors the imported wafer horizontally across X (useful for flipping asymmetric structures during bonding).
+                          </span>
+                        </div>
+                      </label>
                     </div>
                   )}
 

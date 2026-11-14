@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useMemo, useCallback, useEffect, useLayoutEffect } from 'react';
 import {
   ProcessFlow,
   ProcessSide,
@@ -30,6 +30,7 @@ interface CrossSectionCanvasProps {
   polygons: RenderedPolygon[];
   materials: Material[];
   waferWidth: number; // nm
+  flowId?: string;
   thicknessUnit?: ThicknessUnit;
   title?: string;
   stepNumber?: number;
@@ -43,6 +44,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   polygons,
   materials,
   waferWidth,
+  flowId,
   thicknessUnit = 'nm',
   title,
   stepNumber,
@@ -114,6 +116,19 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   const [showGrid, setShowGrid] = useState<boolean>(true);
   const [renderMode, setRenderMode] = useState<'hatch' | 'solid'>('hatch');
 
+  // Locked projection baseline when user manually zooms or pans so step changes,
+  // MaskEditor mounting/unmounting, and sidebar toggles never rescale or shift features.
+  const [lockedMetrics, setLockedMetrics] = useState<{
+    heightSpan: number;
+    rawMinY: number;
+    paddingX: number;
+    datumScreenY: number;
+    contentWidth: number;
+    contentHeight: number;
+  } | null>(null);
+  const isLockedRef = useRef<boolean>(false);
+  isLockedRef.current = lockedMetrics !== null;
+
   // SVG coordinate dimensions derived dynamically from container
   const svgWidth = Math.max(380, containerSize.width);
   const svgHeight = Math.max(260, containerSize.height);
@@ -125,6 +140,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
 
   const contentWidth = svgWidth - paddingX * 2;
   const contentHeight = svgHeight - bottomPadding - topPadding;
+  const datumScreenY = svgHeight - bottomPadding;
 
   // True mathematical bounding box of the wafer geometry across all layers
   const { boundMinX, boundMaxX, boundMinY, boundMaxY } = useMemo(() => {
@@ -156,33 +172,53 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
 
   const rawMinY = boundMinY;
   const rawMaxY = boundMaxY;
-  const heightSpan = Math.max(300, rawMaxY - rawMinY);
+  const actualSpan = Math.max(300, rawMaxY - rawMinY);
+
+  const effectiveMinY = lockedMetrics ? lockedMetrics.rawMinY : rawMinY;
+  const effectiveSpan = lockedMetrics ? lockedMetrics.heightSpan : actualSpan;
+  const effectivePaddingX = lockedMetrics ? lockedMetrics.paddingX : paddingX;
+  const effectiveDatumScreenY = lockedMetrics ? lockedMetrics.datumScreenY : datumScreenY;
+  const effectiveContentWidth = lockedMetrics ? lockedMetrics.contentWidth : contentWidth;
+  const effectiveContentHeight = lockedMetrics ? lockedMetrics.contentHeight : contentHeight;
 
   // Coordinate transforms: world nm -> SVG canvas coordinates
-  const scaleX = contentWidth / waferWidth;
+  const scaleX = effectiveContentWidth / waferWidth;
   // baseScaleY is normalized so that at 2.0x zScale, the wafer occupies ~62% of vertical contentHeight
-  const baseScaleY = (contentHeight * 0.62) / (heightSpan * 2.0);
+  const baseScaleY = (effectiveContentHeight * 0.62) / (effectiveSpan * 2.0);
   const scaleY = baseScaleY * zScale;
+
+  const lockViewport = useCallback(() => {
+    setLockedMetrics((prev) =>
+      prev ?? {
+        heightSpan: actualSpan,
+        rawMinY,
+        paddingX,
+        datumScreenY,
+        contentWidth,
+        contentHeight,
+      }
+    );
+  }, [actualSpan, rawMinY, paddingX, datumScreenY, contentWidth, contentHeight]);
 
   // World point to Screen point
   const toScreen = useCallback(
     (x: number, y: number) => {
-      const sx = paddingX + x * scaleX;
+      const sx = effectivePaddingX + x * scaleX;
       // Cleanroom physics: bottom of wafer is anchored to bottom datum line
-      const sy = (svgHeight - bottomPadding) - (y - rawMinY) * scaleY;
+      const sy = effectiveDatumScreenY - (y - effectiveMinY) * scaleY;
       return { x: sx, y: sy };
     },
-    [scaleX, scaleY, rawMinY, svgHeight, bottomPadding, paddingX]
+    [scaleX, scaleY, effectiveMinY, effectiveDatumScreenY, effectivePaddingX]
   );
 
   // Screen point to World nm
   const toWorld = useCallback(
     (sx: number, sy: number) => {
-      const wx = (sx - paddingX) / scaleX;
-      const wy = rawMinY + ((svgHeight - bottomPadding) - sy) / scaleY;
+      const wx = (sx - effectivePaddingX) / scaleX;
+      const wy = effectiveMinY + (effectiveDatumScreenY - sy) / scaleY;
       return { x: Math.max(0, Math.min(waferWidth, wx)), y: wy };
     },
-    [scaleX, scaleY, rawMinY, svgHeight, bottomPadding, paddingX, waferWidth]
+    [scaleX, scaleY, effectiveMinY, effectiveDatumScreenY, effectivePaddingX, waferWidth]
   );
 
   // Convert polygon points to SVG path with Z-scale
@@ -200,8 +236,18 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
 
   // Intelligent Fit to Screen: centers the entire wafer bounding box into the viewport with 100% visibility
   const fitToScreen = useCallback(() => {
-    const pBL = toScreen(boundMinX, boundMinY);
-    const pTR = toScreen(boundMaxX, boundMaxY);
+    setLockedMetrics(null);
+
+    const actualBaseScaleY = (contentHeight * 0.62) / (actualSpan * 2.0);
+    const actualScaleX = contentWidth / waferWidth;
+    const actualScaleY = actualBaseScaleY * zScale;
+    const project = (x: number, y: number) => ({
+      x: paddingX + x * actualScaleX,
+      y: (svgHeight - bottomPadding) - (y - rawMinY) * actualScaleY,
+    });
+
+    const pBL = project(boundMinX, boundMinY);
+    const pTR = project(boundMaxX, boundMaxY);
 
     const waferScreenW = Math.max(20, Math.abs(pTR.x - pBL.x));
     const waferScreenH = Math.max(20, Math.abs(pBL.y - pTR.y));
@@ -228,11 +274,16 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     setPan({ x: panX, y: panY });
     setMeasurePoints([]);
   }, [
-    toScreen,
     boundMinX,
     boundMinY,
     boundMaxX,
     boundMaxY,
+    rawMinY,
+    actualSpan,
+    waferWidth,
+    zScale,
+    contentWidth,
+    contentHeight,
     svgWidth,
     svgHeight,
     paddingX,
@@ -240,10 +291,37 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     topPadding,
   ]);
 
-  // Auto-fit on initial render or when step/dimensions/containerSize change
+  // Reset viewport lock when switching to a different flow preset or changing wafer width
   useEffect(() => {
+    setLockedMetrics(null);
+  }, [flowId, waferWidth]);
+
+  // Keep the inspected center feature anchored when container resizes (e.g. MaskEditor mounting on litho steps)
+  const prevSvgSizeRef = useRef<{ width: number; height: number }>({
+    width: svgWidth,
+    height: svgHeight,
+  });
+
+  useLayoutEffect(() => {
+    const prev = prevSvgSizeRef.current;
+    const dw = svgWidth - prev.width;
+    const dh = svgHeight - prev.height;
+    prevSvgSizeRef.current = { width: svgWidth, height: svgHeight };
+
+    if (lockedMetrics !== null && (dw !== 0 || dh !== 0)) {
+      setPan((p) => ({
+        x: p.x + dw / 2,
+        y: p.y + dh / 2,
+      }));
+    }
+  }, [svgWidth, svgHeight, lockedMetrics]);
+
+  // Auto-fit ONLY when user has not manually zoomed/panned
+  useEffect(() => {
+    if (lockedMetrics !== null) return;
     fitToScreen();
   }, [
+    lockedMetrics,
     stepNumber,
     waferWidth,
     zScale,
@@ -268,6 +346,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   // Uniform zoom around a pivot in SVG coordinates (never distorts geometry aspect ratio)
   const zoomAroundPoint = useCallback(
     (targetZoom: number, pivotSvgX: number, pivotSvgY: number) => {
+      lockViewport();
       const clampedZoom = Math.max(0.12, Math.min(25.0, targetZoom));
       const ux = (pivotSvgX - pan.x) / zoom;
       const uy = (pivotSvgY - pan.y) / zoom;
@@ -277,7 +356,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
         y: pivotSvgY - uy * clampedZoom,
       });
     },
-    [pan.x, pan.y, zoom]
+    [pan.x, pan.y, zoom, lockViewport]
   );
 
   // Commit selected region zoom uniformly so selection aspect ratio never stretches geometry
@@ -296,6 +375,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
         return;
       }
 
+      lockViewport();
       const safeSelW = Math.max(8, selW);
       const safeSelH = Math.max(8, selH);
 
@@ -318,7 +398,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
         y: svgHeight / 2 - uCenterY * newZoom,
       });
     },
-    [pan.x, pan.y, zoom, svgWidth, svgHeight, zoomAroundPoint]
+    [pan.x, pan.y, zoom, svgWidth, svgHeight, zoomAroundPoint, lockViewport]
   );
 
   // Keyboard shortcuts: 'F' to fit to screen, 'Escape' to cancel region zoom / caliper
@@ -350,8 +430,10 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     const handleFullscreenChange = () => {
       const isFs = !!document.fullscreenElement;
       setIsFullscreen(isFs);
-      // Re-measure and fit shortly after animation completes
-      setTimeout(fitToScreen, 120);
+      // Only auto-fit on fullscreen toggle if user hasn't locked a custom zoom/pan
+      if (!isLockedRef.current) {
+        setTimeout(fitToScreen, 120);
+      }
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -435,9 +517,14 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
 
     if (isPanning) {
+      const nextPanX = e.clientX - panStart.x;
+      const nextPanY = e.clientY - panStart.y;
+      if (Math.abs(nextPanX - pan.x) > 2 || Math.abs(nextPanY - pan.y) > 2) {
+        lockViewport();
+      }
       setPan({
-        x: e.clientX - panStart.x,
-        y: e.clientY - panStart.y,
+        x: nextPanX,
+        y: nextPanY,
       });
     }
   };
@@ -567,7 +654,20 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
             <span className="text-[10px] text-slate-400 font-mono">Z:</span>
             <select
               value={zScale.toFixed(1)}
-              onChange={(e) => setZScale(parseFloat(e.target.value))}
+              onChange={(e) => {
+                const nextZ = parseFloat(e.target.value);
+                if (lockedMetrics !== null && zScale > 0) {
+                  const uyOld = (svgHeight / 2 - pan.y) / zoom;
+                  const uyNew =
+                    effectiveDatumScreenY -
+                    (effectiveDatumScreenY - uyOld) * (nextZ / zScale);
+                  setPan((p) => ({
+                    ...p,
+                    y: svgHeight / 2 - uyNew * zoom,
+                  }));
+                }
+                setZScale(nextZ);
+              }}
               className="bg-transparent text-white font-mono text-[11px] focus:outline-none cursor-pointer"
             >
               <option value="1.0" className="bg-slate-900">1.0x</option>
@@ -706,7 +806,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                     fill={fillRef}
                     stroke={isHovered ? '#38bdf8' : mat.strokeColor || '#1e293b'}
                     strokeWidth={isHovered ? 2.5 : 1.2}
-                    className="transition-all cursor-pointer"
+                    className="transition-colors cursor-pointer"
                     onMouseEnter={() => setHoveredPolygon(poly)}
                     onMouseLeave={() => setHoveredPolygon(null)}
                   />
@@ -722,9 +822,9 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                 return (
                   <>
                     <line
-                      x1={paddingX}
+                      x1={effectivePaddingX}
                       y1={datumY}
-                      x2={paddingX + contentWidth}
+                      x2={effectivePaddingX + effectiveContentWidth}
                       y2={datumY}
                       stroke="#64748b"
                       strokeWidth="1.5"
@@ -753,7 +853,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
 
                     {/* Wafer Orientation Markers (Frontside +Z / Backside -Z) */}
                     <text
-                      x={paddingX}
+                      x={effectivePaddingX}
                       y={toScreen(0, rawMaxY).y - 10}
                       fill={
                         activeStepSide === 'front' || !activeStepSide
@@ -769,7 +869,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                       ▲ FRONTSIDE (+Z)
                     </text>
                     <text
-                      x={paddingX}
+                      x={effectivePaddingX}
                       y={datumY + 34}
                       fill={
                         activeStepSide === 'back'
@@ -908,12 +1008,56 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
           })()}
 
           {/* Cleanroom Scale Bar HUD in bottom-left */}
-          <g transform={`translate(${paddingX}, ${svgHeight - 20})`}>
+          <g transform={`translate(${Math.min(paddingX, 40)}, ${svgHeight - 20})`}>
             {(() => {
-              // 1.0 µm or 0.5 µm scale bar length in screen pixels
-              const barUm = waferWidth >= 5000 ? 1.0 : 0.5;
-              const barNm = barUm * 1000;
-              const barPixels = barNm * scaleX * zoom;
+              const pxPerNm = scaleX * zoom;
+              if (!Number.isFinite(pxPerNm) || pxPerNm <= 0) return null;
+
+              const leftOriginX = Math.min(paddingX, 40);
+              const maxBarPx = Math.max(64, Math.min(180, svgWidth - leftOriginX - 210));
+              const minBarPx = Math.min(44, maxBarPx * 0.45);
+              const targetBarPx = Math.max(minBarPx, Math.min(115, maxBarPx * 0.72));
+
+              // Pick the cleanest 1-2-5 * 10^k nm length within [minBarPx, maxBarPx]
+              let bestNm = 1000;
+              let bestScore = Infinity;
+              for (let exp = -1; exp <= 7; exp++) {
+                const pow = Math.pow(10, exp);
+                for (const mult of [1, 2, 5]) {
+                  const candidateNm = mult * pow;
+                  const px = candidateNm * pxPerNm;
+                  if (px > maxBarPx) continue;
+                  const penalty = px < minBarPx ? (minBarPx - px) * 5 : 0;
+                  const score = Math.abs(px - targetBarPx) + penalty;
+                  if (score < bestScore) {
+                    bestScore = score;
+                    bestNm = candidateNm;
+                  }
+                }
+              }
+
+              // Fallback if even smallest candidate exceeded maxBarPx
+              let barPixels = bestNm * pxPerNm;
+              if (barPixels > maxBarPx) {
+                barPixels = maxBarPx;
+                bestNm = maxBarPx / pxPerNm;
+              }
+
+              const formatScaleLabel = (nm: number): string => {
+                if (nm >= 1_000_000) {
+                  const mm = Math.round((nm / 1_000_000) * 1000) / 1000;
+                  return `${mm} mm`;
+                }
+                if (nm >= 1000) {
+                  const um = Math.round((nm / 1000) * 1000) / 1000;
+                  return `${um} µm`;
+                }
+                const cleanNm = Math.round(nm * 100) / 100;
+                return `${cleanNm} nm`;
+              };
+
+              const label = formatScaleLabel(bestNm);
+              const labelX = Math.max(22, barPixels / 2);
 
               return (
                 <g>
@@ -922,28 +1066,41 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                     y1="0"
                     x2={barPixels}
                     y2="0"
-                    stroke="#e2e8f0"
-                    strokeWidth="3"
+                    stroke="#020617"
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                    opacity="0.7"
                   />
-                  <line x1="0" y1="-4" x2="0" y2="4" stroke="#e2e8f0" strokeWidth="2" />
+                  <line
+                    x1="0"
+                    y1="0"
+                    x2={barPixels}
+                    y2="0"
+                    stroke="#e2e8f0"
+                    strokeWidth="2.5"
+                  />
+                  <line x1="0" y1="-4.5" x2="0" y2="4.5" stroke="#e2e8f0" strokeWidth="2" />
                   <line
                     x1={barPixels}
-                    y1="-4"
+                    y1="-4.5"
                     x2={barPixels}
-                    y2="4"
+                    y2="4.5"
                     stroke="#e2e8f0"
                     strokeWidth="2"
                   />
                   <text
-                    x={barPixels / 2}
-                    y="-6"
-                    fill="#e2e8f0"
-                    fontSize="10"
+                    x={labelX}
+                    y="-7"
+                    fill="#f1f5f9"
+                    stroke="#020617"
+                    strokeWidth="3"
+                    paintOrder="stroke"
+                    fontSize="10.5"
                     fontWeight="600"
                     fontFamily="JetBrains Mono, monospace"
                     textAnchor="middle"
                   >
-                    {barUm} µm
+                    {label}
                   </text>
                 </g>
               );
