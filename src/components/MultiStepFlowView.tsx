@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
 import {
   ProcessFlow,
   ProcessStep,
@@ -13,6 +13,13 @@ import {
 import { simulateCrossSection, buildRenderPolygons } from '../lib/simulationEngine';
 import { switchStepVariant, getActiveStepVariant } from '../lib/variantUtils';
 import { syncStepWindowsToMask } from '../lib/maskUtils';
+import {
+  PiecewiseZMode,
+  CustomZZonesConfig,
+  computePiecewiseZTransform,
+  subdividePolygonAtBreakpoints,
+} from '../lib/piecewiseZScale';
+import { PiecewiseZPopover } from './PiecewiseZPopover';
 import { SvgPatterns } from './SvgPatterns';
 import { getMaterialById } from '../lib/materials';
 import { ThicknessUnit, formatThickness } from '../lib/units';
@@ -28,11 +35,26 @@ import {
   Workflow,
   FileText,
   Files,
+  Lock,
+  Unlock,
+  ChevronDown,
 } from 'lucide-react';
 
 interface MultiStepFlowViewProps {
   flow: ProcessFlow;
   thicknessUnit?: ThicknessUnit;
+  zScale?: number;
+  onChangeZScale?: (next: number) => void;
+  zAspect1to1?: boolean;
+  onChangeZAspect1to1?: (next: boolean) => void;
+  lockSharedYScale?: boolean;
+  onToggleLockSharedYScale?: () => void;
+  piecewiseMode?: PiecewiseZMode;
+  onChangePiecewiseMode?: (next: PiecewiseZMode) => void;
+  autoCompression?: number;
+  onChangeAutoCompression?: (next: number) => void;
+  customZConfig?: CustomZZonesConfig;
+  onChangeCustomZConfig?: (next: CustomZZonesConfig) => void;
   onSelectStepIndex: (idx: number) => void;
   onUpdateFlow?: (updatedFlow: ProcessFlow) => void;
   onOpenBatchExport?: () => void;
@@ -100,9 +122,11 @@ interface BlockGroupBox {
 }
 
 const CARD_W = 420;
-const CARD_H = 190;
+const BASE_CARD_H = 190;
+const CARD_HEADER_H = 56;
 const PAD_X = 22;
 const PAD_Y = 20;
+const BASE_AVAIL_POLY_H = BASE_CARD_H - PAD_Y - CARD_HEADER_H; // 114
 
 const STEP_ACCENT_COLORS: Record<string, string> = {
   substrate: '#10b981',
@@ -121,6 +145,18 @@ const STEP_ACCENT_COLORS: Record<string, string> = {
 export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
   flow,
   thicknessUnit = 'nm',
+  zScale: zScaleProp,
+  onChangeZScale,
+  zAspect1to1: zAspect1to1Prop,
+  onChangeZAspect1to1,
+  lockSharedYScale: lockSharedYScaleProp,
+  onToggleLockSharedYScale,
+  piecewiseMode: piecewiseModeProp,
+  onChangePiecewiseMode,
+  autoCompression: autoCompressionProp,
+  onChangeAutoCompression,
+  customZConfig: customZConfigProp,
+  onChangeCustomZConfig,
   onSelectStepIndex,
   onUpdateFlow,
   onOpenBatchExport,
@@ -137,6 +173,37 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
   const [blockLastStepOnly, setBlockLastStepOnly] = useState<boolean>(false);
   const [renderMode, setRenderMode] = useState<'hatch' | 'solid'>('hatch');
   const [showOutlines, setShowOutlines] = useState<boolean>(true);
+
+  const [internalZScale, setInternalZScale] = useState<number>(2.0);
+  const zScale = zScaleProp ?? internalZScale;
+  const setZScale = onChangeZScale ?? setInternalZScale;
+
+  const [internalZAspect1to1, setInternalZAspect1to1] = useState<boolean>(false);
+  const zAspect1to1 = zAspect1to1Prop ?? internalZAspect1to1;
+  const setZAspect1to1 = onChangeZAspect1to1 ?? setInternalZAspect1to1;
+
+  const [internalSharedYScale, setInternalSharedYScale] = useState<boolean>(true);
+  const sharedYScale = lockSharedYScaleProp ?? internalSharedYScale;
+  const toggleSharedYScale =
+    onToggleLockSharedYScale ?? (() => setInternalSharedYScale((prev) => !prev));
+
+  const [internalPiecewiseMode, setInternalPiecewiseMode] = useState<PiecewiseZMode>('linear');
+  const piecewiseMode = piecewiseModeProp ?? internalPiecewiseMode;
+  const setPiecewiseMode = onChangePiecewiseMode ?? setInternalPiecewiseMode;
+
+  const [internalAutoCompression, setInternalAutoCompression] = useState<number>(0.75);
+  const autoCompression = autoCompressionProp ?? internalAutoCompression;
+  const setAutoCompression = onChangeAutoCompression ?? setInternalAutoCompression;
+
+  const [internalCustomZConfig, setInternalCustomZConfig] = useState<CustomZZonesConfig>({
+    breakpointsNm: [],
+    zoneGains: [1],
+  });
+  const customZConfig = customZConfigProp ?? internalCustomZConfig;
+  const setCustomZConfig = onChangeCustomZConfig ?? setInternalCustomZConfig;
+
+  const [showPiecewisePopover, setShowPiecewisePopover] = useState<boolean>(false);
+  const piecewiseMenuRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
   const hasBookmarkedSteps = useMemo(
@@ -308,19 +375,158 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
     showVariants,
   ]);
 
-  // Global vertical mesh span across all trunk & variant cross-sections for consistent scaling
-  const globalMaxMeshSpan = useMemo(() => {
-    let maxSpan = 3500;
+  // Global vertical mesh/polygon bounds across all trunk & variant cross-sections
+  const globalBounds = useMemo(() => {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    const inspect = (mesh: CrossSectionMesh, polygons: RenderedPolygon[]) => {
+      if (Number.isFinite(mesh.minY) && mesh.minY < minY) minY = mesh.minY;
+      if (Number.isFinite(mesh.maxY) && mesh.maxY > maxY) maxY = mesh.maxY;
+      for (const poly of polygons) {
+        if (Number.isFinite(poly.yMin) && poly.yMin < minY) minY = poly.yMin;
+        if (Number.isFinite(poly.yMax) && poly.yMax > maxY) maxY = poly.yMax;
+      }
+    };
     stages.forEach((st) => {
-      const span = Math.max(1000, st.mesh.maxY - st.mesh.minY);
-      if (span > maxSpan) maxSpan = span;
+      inspect(st.mesh, st.polygons);
+      st.altVariants.forEach((av) => inspect(av.mesh, av.polygons));
+    });
+    if (!Number.isFinite(minY)) minY = 0;
+    if (!Number.isFinite(maxY)) maxY = 3500;
+    if (maxY - minY < 1000) maxY = minY + 1000;
+    return {
+      minY,
+      maxY,
+      span: Math.max(1000, maxY - minY),
+    };
+  }, [stages]);
+
+  const allStagePolygons = useMemo(() => {
+    const list: RenderedPolygon[] = [];
+    stages.forEach((st) => {
+      for (const p of st.polygons) list.push(p);
       st.altVariants.forEach((av) => {
-        const vSpan = Math.max(1000, av.mesh.maxY - av.mesh.minY);
-        if (vSpan > maxSpan) maxSpan = vSpan;
+        for (const p of av.polygons) list.push(p);
       });
     });
-    return maxSpan;
+    return list;
   }, [stages]);
+
+  const waferWidth = flow.substrateWidth || 10000;
+  const cardScaleX = (CARD_W - PAD_X * 2) / waferWidth;
+  const trueAspectPolyH = globalBounds.span * cardScaleX;
+  const isTrueAspectClamped = trueAspectPolyH < 48 || trueAspectPolyH > 460;
+
+  const availPolyH = useMemo(() => {
+    if (zAspect1to1) {
+      return Math.round(Math.max(48, Math.min(460, trueAspectPolyH)));
+    }
+    const factor = Math.max(0.35, zScale / 2.0);
+    return Math.round(BASE_AVAIL_POLY_H * factor);
+  }, [zAspect1to1, zScale, trueAspectPolyH]);
+
+  const cardH = CARD_HEADER_H + availPolyH + PAD_Y;
+
+  const sharedZTransform = useMemo(
+    () =>
+      computePiecewiseZTransform({
+        mode: piecewiseMode,
+        polygons: allStagePolygons,
+        rawMinY: globalBounds.minY,
+        rawMaxY: globalBounds.maxY,
+        waferWidth,
+        autoCompression,
+        customConfig: customZConfig,
+      }),
+    [
+      piecewiseMode,
+      allStagePolygons,
+      globalBounds.minY,
+      globalBounds.maxY,
+      waferWidth,
+      autoCompression,
+      customZConfig,
+    ]
+  );
+
+  const autoPreviewTransform = useMemo(
+    () =>
+      piecewiseMode === 'auto'
+        ? sharedZTransform
+        : computePiecewiseZTransform({
+            mode: 'auto',
+            polygons: allStagePolygons,
+            rawMinY: globalBounds.minY,
+            rawMaxY: globalBounds.maxY,
+            waferWidth,
+            autoCompression,
+          }),
+    [
+      piecewiseMode,
+      sharedZTransform,
+      allStagePolygons,
+      globalBounds.minY,
+      globalBounds.maxY,
+      waferWidth,
+      autoCompression,
+    ]
+  );
+
+  const handleSeedCustomFromAuto = useCallback(() => {
+    const bps = [...autoPreviewTransform.breakpoints];
+    const gains = autoPreviewTransform.bands.map((b) =>
+      Math.max(0.01, Math.round(b.localGain * 100) / 100)
+    );
+    setCustomZConfig({
+      breakpointsNm: bps,
+      zoneGains: gains.length === bps.length + 1 ? gains : [1],
+    });
+    setPiecewiseMode('custom');
+  }, [autoPreviewTransform, setCustomZConfig, setPiecewiseMode]);
+
+  const handleChangePiecewiseMode = useCallback(
+    (next: PiecewiseZMode) => {
+      if (
+        next === 'custom' &&
+        customZConfig.breakpointsNm.length === 0 &&
+        autoPreviewTransform.isActive
+      ) {
+        handleSeedCustomFromAuto();
+        return;
+      }
+      setPiecewiseMode(next);
+    },
+    [
+      customZConfig.breakpointsNm.length,
+      autoPreviewTransform.isActive,
+      handleSeedCustomFromAuto,
+      setPiecewiseMode,
+    ]
+  );
+
+  useEffect(() => {
+    if (!showPiecewisePopover) return;
+    const handleOutside = (e: PointerEvent) => {
+      if (
+        piecewiseMenuRef.current &&
+        !piecewiseMenuRef.current.contains(e.target as Node)
+      ) {
+        setShowPiecewisePopover(false);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setShowPiecewisePopover(false);
+      }
+    };
+    window.addEventListener('pointerdown', handleOutside);
+    window.addEventListener('keydown', handleKey, true);
+    return () => {
+      window.removeEventListener('pointerdown', handleOutside);
+      window.removeEventListener('keydown', handleKey, true);
+    };
+  }, [showPiecewisePopover]);
 
   // Overall materials used across trunk & rendered variant nodes
   const allUsedMaterials = useMemo(() => {
@@ -380,7 +586,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
           curY += 42; // extra top clearance if step 0 has a branch diamond above it
         }
         stageYs.push(curY);
-        curY += CARD_H;
+        curY += cardH;
       }
 
       const lastHasVars = stages[stages.length - 1].altVariants.length > 0;
@@ -402,8 +608,8 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
         });
 
         // Incoming connector + optional branch diamond
-        const prevBottomY = i > 0 ? stageYs[i - 1] + CARD_H : y - 34;
-        const prevRejoinY = i > 0 && stages[i - 1].altVariants.length > 0 ? stageYs[i - 1] + CARD_H + 18 : prevBottomY;
+        const prevBottomY = i > 0 ? stageYs[i - 1] + cardH : y - 34;
+        const prevRejoinY = i > 0 && stages[i - 1].altVariants.length > 0 ? stageYs[i - 1] + cardH + 18 : prevBottomY;
 
         if (st.altVariants.length > 0) {
           const diamondCy = y - 32;
@@ -440,10 +646,10 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
               kind: 'branch',
             });
 
-            const rejoinY = y + CARD_H + 18;
+            const rejoinY = y + cardH + 18;
             connectors.push({
               id: `conn_rj_${i}_${vIdx}`,
-              d: `M ${altCenterX} ${y + CARD_H} L ${altCenterX} ${rejoinY} L ${trunkCenterX + 6} ${rejoinY}`,
+              d: `M ${altCenterX} ${y + cardH} L ${altCenterX} ${rejoinY} L ${trunkCenterX + 6} ${rejoinY}`,
               kind: 'rejoin',
             });
           });
@@ -466,7 +672,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
         width: END_W,
         height: END_H,
       };
-      const lastBottomY = stageYs[stages.length - 1] + CARD_H;
+      const lastBottomY = stageYs[stages.length - 1] + cardH;
       connectors.push({
         id: 'conn_end',
         d: `M ${trunkCenterX} ${lastBottomY} L ${trunkCenterX} ${afterLastY - 4}`,
@@ -492,7 +698,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
           const topPad = stages[runStart].altVariants.length > 0 ? 52 : 24;
           const boxY = stageYs[runStart] - topPad;
           const boxBot =
-            stageYs[runEnd] + CARD_H + (stages[runEnd].altVariants.length > 0 ? 24 : 12);
+            stageYs[runEnd] + cardH + (stages[runEnd].altVariants.length > 0 ? 24 : 12);
           blockBoxes.push({
             id: `blk_${prevBlockId}_${runStart}`,
             name: bStage.blockName || 'Process Module',
@@ -534,12 +740,12 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
 
       const maxRows = Math.max(1, ...stages.map((s) => 1 + s.altVariants.length));
       const trunkY = MARGIN_Y + 12;
-      const trunkCenterY = trunkY + CARD_H / 2;
+      const trunkCenterY = trunkY + cardH / 2;
 
       contentWidth = endX + END_W + MARGIN_X;
       contentHeight = Math.max(
         300,
-        trunkY + maxRows * CARD_H + (maxRows - 1) * ROW_GAP + 32
+        trunkY + maxRows * cardH + (maxRows - 1) * ROW_GAP + 32
       );
 
       stages.forEach((st, i) => {
@@ -547,7 +753,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
         nodes.push({ x, y: trunkY, stageIdx: i, variantIdx: -1 });
 
         st.altVariants.forEach((_, vIdx) => {
-          const vy = trunkY + (vIdx + 1) * (CARD_H + ROW_GAP);
+          const vy = trunkY + (vIdx + 1) * (cardH + ROW_GAP);
           nodes.push({ x, y: vy, stageIdx: i, variantIdx: vIdx });
         });
 
@@ -581,7 +787,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
           });
 
           st.altVariants.forEach((_, vIdx) => {
-            const altCenterY = trunkY + (vIdx + 1) * (CARD_H + ROW_GAP) + CARD_H / 2;
+            const altCenterY = trunkY + (vIdx + 1) * (cardH + ROW_GAP) + cardH / 2;
             connectors.push({
               id: `conn_h_br_${i}_${vIdx}`,
               d: `M ${diamondCx} ${diamondBot} L ${diamondCx} ${altCenterY} L ${x - 4} ${altCenterY}`,
@@ -643,7 +849,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
             x: boxX,
             y: trunkY - 26,
             width: boxRight - boxX,
-            height: maxSpanRows * CARD_H + (maxSpanRows - 1) * ROW_GAP + 42,
+            height: maxSpanRows * cardH + (maxSpanRows - 1) * ROW_GAP + 42,
           });
         }
         runStart = curBlockId ? i : -1;
@@ -668,7 +874,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
           const stackCount = 1 + stages[idx].altVariants.length;
           if (stackCount > maxStackInRow) maxStackInRow = stackCount;
         }
-        const rowH = maxStackInRow * CARD_H + (maxStackInRow - 1) * VAR_STACK_GAP;
+        const rowH = maxStackInRow * cardH + (maxStackInRow - 1) * VAR_STACK_GAP;
         curY += rowH + ROW_GAP;
       }
 
@@ -688,13 +894,13 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
 
         if (st.altVariants.length > 0) {
           const railX = x - 14;
-          const branchAnchorY = y + CARD_H / 2;
+          const branchAnchorY = y + cardH / 2;
           st.altVariants.forEach((_, vIdx) => {
-            const vy = y + (vIdx + 1) * (CARD_H + VAR_STACK_GAP);
+            const vy = y + (vIdx + 1) * (cardH + VAR_STACK_GAP);
             nodes.push({ x, y: vy, stageIdx: idx, variantIdx: vIdx });
             connectors.push({
               id: `conn_snk_br_${idx}_${vIdx}`,
-              d: `M ${x} ${branchAnchorY} L ${railX} ${branchAnchorY} L ${railX} ${vy + CARD_H / 2} L ${x - 4} ${vy + CARD_H / 2}`,
+              d: `M ${x} ${branchAnchorY} L ${railX} ${branchAnchorY} L ${railX} ${vy + cardH / 2} L ${x - 4} ${vy + cardH / 2}`,
               kind: 'branch',
             });
           });
@@ -702,8 +908,8 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
 
         if (idx > 0) {
           const prev = stageCoords[idx - 1];
-          const prevMidY = prev.y + CARD_H / 2;
-          const curMidY = y + CARD_H / 2;
+          const prevMidY = prev.y + cardH / 2;
+          const curMidY = y + cardH / 2;
           if (prev.row === row) {
             if (col > prev.col) {
               // Left to Right
@@ -726,7 +932,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
             const prevAltCount = stages[idx - 1].altVariants.length;
             if (prevAltCount === 0) {
               const px = prev.x + CARD_W / 2;
-              const py = prev.y + CARD_H;
+              const py = prev.y + cardH;
               connectors.push({
                 id: `conn_snk_${idx}`,
                 d: `M ${px} ${py} L ${x + CARD_W / 2} ${y - 4}`,
@@ -758,7 +964,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
       };
       const lastStackBottom =
         lastCoord.y +
-        (1 + stages[stages.length - 1].altVariants.length) * CARD_H +
+        (1 + stages[stages.length - 1].altVariants.length) * cardH +
         stages[stages.length - 1].altVariants.length * VAR_STACK_GAP;
       connectors.push({
         id: 'conn_snk_end',
@@ -777,7 +983,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
       contentWidth,
       contentHeight,
     };
-  }, [stages, flowMode]);
+  }, [stages, flowMode, cardH]);
 
   // Wrapped Materials Legend computation
   const legendLayout = useMemo(() => {
@@ -1160,6 +1366,110 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
             Hatch
           </button>
 
+          {/* Z Scaling Controls: Vertical Exaggeration Factor, Shared Y Lock, & Piecewise Z-Map */}
+          <div
+            className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-300"
+            title="Vertical Exaggeration Factor (synced with Cross-Section Canvas)"
+          >
+            <span className="text-[10px] text-slate-400 font-mono">Z:</span>
+            <select
+              value={zAspect1to1 ? 'aspect-1to1' : zScale.toFixed(1)}
+              onChange={(e) => {
+                const rawVal = e.target.value;
+                if (rawVal === 'aspect-1to1') {
+                  setZAspect1to1(true);
+                  return;
+                }
+                setZAspect1to1(false);
+                setZScale(parseFloat(rawVal));
+              }}
+              aria-label="Process figure Z scale factor"
+              className="bg-transparent text-white font-mono text-[11px] focus:outline-none cursor-pointer"
+            >
+              <option value="1.0" className="bg-slate-900">1.0×</option>
+              <option value="1.5" className="bg-slate-900">1.5×</option>
+              <option value="2.0" className="bg-slate-900">2.0× (Fit)</option>
+              <option value="3.5" className="bg-slate-900">3.5×</option>
+              <option value="5.0" className="bg-slate-900">5.0×</option>
+              <option value="aspect-1to1" className="bg-slate-900">
+                {isTrueAspectClamped ? '1:1 (Capped)' : '1:1 (X=Y)'}
+              </option>
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={toggleSharedYScale}
+            aria-pressed={sharedYScale}
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
+              sharedYScale
+                ? 'bg-amber-500/20 border-amber-400/60 text-amber-200'
+                : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
+            }`}
+            title={
+              sharedYScale
+                ? 'Shared Y-Axis Scale Across All Steps (click to fit each step individually)'
+                : 'Fit Each Step Independently (click to lock shared Y-axis scale across all steps)'
+            }
+          >
+            {sharedYScale ? (
+              <Lock className="w-3.5 h-3.5 text-amber-300" />
+            ) : (
+              <Unlock className="w-3.5 h-3.5 text-slate-400" />
+            )}
+            <span className="hidden xl:inline">{sharedYScale ? 'Shared Y' : 'Fit Step'}</span>
+          </button>
+
+          <div ref={piecewiseMenuRef} className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowPiecewisePopover((v) => !v)}
+              aria-expanded={showPiecewisePopover}
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
+                piecewiseMode !== 'linear'
+                  ? sharedZTransform.isActive || !sharedYScale
+                    ? 'bg-cyan-500/20 border-cyan-400/60 text-cyan-200'
+                    : 'bg-sky-600/20 border-sky-500/40 text-sky-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+              }`}
+              title="Piecewise Z-Axis Scaling for multi-order-of-magnitude layers"
+            >
+              <span className="font-mono text-[10px] text-slate-400">Z-Map:</span>
+              <span className="font-mono text-[10px]">
+                {piecewiseMode === 'linear'
+                  ? 'Linear'
+                  : piecewiseMode === 'auto'
+                  ? sharedZTransform.isActive
+                    ? `Auto (${sharedZTransform.bands.length})`
+                    : 'Auto (1)'
+                  : `Custom (${sharedZTransform.bands.length})`}
+              </span>
+              {piecewiseMode === 'linear' && autoPreviewTransform.isActive && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"
+                  title={`${autoPreviewTransform.bands.length} Z-scale regimes detected`}
+                />
+              )}
+              <ChevronDown className="w-3 h-3 opacity-70" />
+            </button>
+
+            {showPiecewisePopover && (
+              <PiecewiseZPopover
+                mode={piecewiseMode}
+                onChangeMode={handleChangePiecewiseMode}
+                autoCompression={autoCompression}
+                onChangeAutoCompression={setAutoCompression}
+                customConfig={customZConfig}
+                onChangeCustomConfig={setCustomZConfig}
+                zTransform={sharedZTransform}
+                autoPreviewTransform={autoPreviewTransform}
+                thicknessUnit={thicknessUnit}
+                onSeedCustomFromAuto={handleSeedCustomFromAuto}
+                onClose={() => setShowPiecewisePopover(false)}
+              />
+            )}
+          </div>
+
           {/* Shape Outline toggle */}
           <button
             type="button"
@@ -1245,7 +1555,25 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
             </div>
 
             {/* Interactive Legend Hint */}
-            <div className="flex items-center gap-3 text-[11px] font-mono">
+            <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono">
+              <span
+                className={`px-1.5 py-0.5 rounded border text-[10px] ${
+                  theme === 'paper'
+                    ? 'bg-slate-100 border-slate-300 text-slate-700'
+                    : 'bg-slate-900 border-slate-700 text-slate-300'
+                }`}
+              >
+                Z:{' '}
+                {zAspect1to1
+                  ? isTrueAspectClamped
+                    ? '1:1 (Capped)'
+                    : '1:1 (X=Y)'
+                  : `${zScale.toFixed(1).replace(/\.0$/, '')}×`}{' '}
+                · {sharedYScale ? 'Shared Y' : 'Per-Step Fit'}
+                {piecewiseMode !== 'linear' &&
+                  (sharedZTransform.isActive || !sharedYScale) &&
+                  ` · Piecewise ${piecewiseMode === 'auto' ? 'Auto' : 'Custom'}`}
+              </span>
               <span className="inline-flex items-center gap-1.5">
                 <span
                   className="w-3 h-0.5 inline-block"
@@ -1312,7 +1640,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
                 <path d="M 0 1 L 6 3.5 L 0 6 Z" fill={rejoinStrokeColor} />
               </marker>
               <clipPath id="fc-card-clip">
-                <rect x="0" y="0" width={CARD_W} height={CARD_H} rx="10" />
+                <rect x="0" y="0" width={CARD_W} height={cardH} rx="10" />
               </clipPath>
             </defs>
 
@@ -1472,14 +1800,59 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
                 ? '#cbd5e1'
                 : '#1e293b';
 
-              const subW = flow.substrateWidth || 10000;
-              const scaleX = (CARD_W - PAD_X * 2) / subW;
-              const availPolyH = CARD_H - PAD_Y - 56;
-              const scaleY = availPolyH / globalMaxMeshSpan;
+              const scaleX = (CARD_W - PAD_X * 2) / waferWidth;
+              let cardMinY = globalBounds.minY;
+              let cardMaxY = globalBounds.maxY;
+              if (!sharedYScale) {
+                let sMinY = Number.isFinite(renderMesh.minY) ? renderMesh.minY : Infinity;
+                let sMaxY = Number.isFinite(renderMesh.maxY) ? renderMesh.maxY : -Infinity;
+                for (const poly of renderPolygons) {
+                  if (Number.isFinite(poly.yMin) && poly.yMin < sMinY) sMinY = poly.yMin;
+                  if (Number.isFinite(poly.yMax) && poly.yMax > sMaxY) sMaxY = poly.yMax;
+                }
+                if (!Number.isFinite(sMinY)) sMinY = 0;
+                if (!Number.isFinite(sMaxY)) sMaxY = 3000;
+                if (sMaxY - sMinY < 300) sMaxY = sMinY + 300;
+                cardMinY = sMinY;
+                cardMaxY = sMaxY;
+              }
+              const cardSpanY = Math.max(100, cardMaxY - cardMinY);
+              const scaleY = availPolyH / cardSpanY;
+
+              const cardZTransform = sharedYScale
+                ? sharedZTransform
+                : piecewiseMode === 'linear'
+                ? null
+                : computePiecewiseZTransform({
+                    mode: piecewiseMode,
+                    polygons: renderPolygons,
+                    rawMinY: cardMinY,
+                    rawMaxY: cardMaxY,
+                    waferWidth,
+                    autoCompression,
+                    customConfig: customZConfig,
+                  });
+
+              const polysToRender =
+                cardZTransform &&
+                cardZTransform.isActive &&
+                cardZTransform.breakpoints.length > 0
+                  ? renderPolygons.map((poly) => ({
+                      ...poly,
+                      points: subdividePolygonAtBreakpoints(
+                        poly.points,
+                        cardZTransform.breakpoints
+                      ),
+                    }))
+                  : renderPolygons;
 
               const toScreenLocal = (x: number, y: number) => {
+                const visY =
+                  cardZTransform && cardZTransform.isActive
+                    ? cardZTransform.mapY(y)
+                    : y;
                 const sx = PAD_X + x * scaleX;
-                const sy = CARD_H - PAD_Y - (y - renderMesh.minY) * scaleY;
+                const sy = cardH - PAD_Y - (visY - cardMinY) * scaleY;
                 return { x: sx, y: sy };
               };
 
@@ -1561,7 +1934,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
                   {/* Card Outer Shell */}
                   <rect
                     width={CARD_W}
-                    height={CARD_H}
+                    height={cardH}
                     rx="10"
                     fill={cardBg}
                     stroke={cardBorder}
@@ -1571,7 +1944,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
 
                   {/* Left Accent Strip */}
                   <g clipPath="url(#fc-card-clip)">
-                    <rect x="0" y="0" width="5" height={CARD_H} fill={accentColor} />
+                    <rect x="0" y="0" width="5" height={cardH} fill={accentColor} />
 
                     {/* Top-Right Status / Variant Pill */}
                     <rect
@@ -1625,7 +1998,7 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
 
                     {/* Cross-Section Polygons */}
                     <g>
-                      {renderPolygons.map((poly) => {
+                      {polysToRender.map((poly) => {
                         const mat = getMaterialById(flow.materials, poly.materialId);
                         const pts = poly.points;
                         if (pts.length < 3) return null;
@@ -1660,12 +2033,32 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
                       })}
                     </g>
 
+                    {/* Piecewise Z Breakpoint Guides */}
+                    {cardZTransform &&
+                      cardZTransform.isActive &&
+                      cardZTransform.breakpoints.map((bp, bpIdx) => {
+                        const bpY = toScreenLocal(0, bp).y;
+                        return (
+                          <line
+                            key={`fc_bp_${bpIdx}`}
+                            x1={PAD_X}
+                            y1={bpY}
+                            x2={CARD_W - PAD_X}
+                            y2={bpY}
+                            stroke={theme === 'paper' ? '#0284c7' : '#38bdf8'}
+                            strokeOpacity="0.32"
+                            strokeWidth="0.9"
+                            strokeDasharray="4 3"
+                          />
+                        );
+                      })}
+
                     {/* Datum Line */}
                     <line
                       x1={PAD_X}
-                      y1={CARD_H - PAD_Y}
+                      y1={cardH - PAD_Y}
                       x2={CARD_W - PAD_X}
-                      y2={CARD_H - PAD_Y}
+                      y2={cardH - PAD_Y}
                       stroke={theme === 'paper' ? '#94a3b8' : '#475569'}
                       strokeWidth="1"
                     />

@@ -163,7 +163,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="flex flex-wrap items-center justify-between gap-2 px-2.5 sm:px-4 py-2 bg-slate-900 border-b border-slate-800 text-slate-200 shadow-md select-none shrink-0 z-30">
+    <header className="flex flex-wrap items-center justify-between gap-2 px-2.5 sm:px-4 py-2 bg-slate-900 border-b border-slate-800 text-slate-200 shadow-md select-none shrink-0 relative z-40">
       {/* Brand & Process Title */}
       <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 xl:flex-initial">
         {(onToggleLeftSidebar || onToggleRightSidebar) && (
@@ -292,7 +292,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
 
               {descOpen && (
-                <div className="absolute left-0 mt-1.5 w-80 sm:w-96 rounded-xl bg-slate-900 border border-slate-700 shadow-2xl p-3 z-50 space-y-2.5 text-xs">
+                <div className="fixed left-3 right-3 top-14 sm:absolute sm:left-0 sm:right-auto sm:top-auto sm:mt-1.5 sm:w-96 rounded-xl bg-slate-900 border border-slate-700 shadow-2xl p-3 z-50 space-y-2.5 text-xs">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold text-white">
                       Custom Process Description

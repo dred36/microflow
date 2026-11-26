@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import { Material, PatternType, MaterialCategory } from '../types/microfab';
 import { isCrystallineKohMaterial } from '../lib/materials';
-import { Plus, Trash2, X, Sparkles, Check } from 'lucide-react';
+import { Plus, Trash2, X, Search } from 'lucide-react';
 
 interface MaterialsModalProps {
   materials: Material[];
@@ -21,6 +21,7 @@ export const MaterialsModal: React.FC<MaterialsModalProps> = ({
 }) => {
   const [editingMat, setEditingMat] = useState<Material | null>(null);
   const [filterCategory, setFilterCategory] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Form state for creating/editing material
   const [name, setName] = useState<string>('');
@@ -89,9 +90,23 @@ export const MaterialsModal: React.FC<MaterialsModalProps> = ({
     if (editingMat?.id === id) setEditingMat(null);
   };
 
-  const filtered = materials.filter((m) =>
-    filterCategory === 'all' ? true : m.category === filterCategory
-  );
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filtered = materials.filter((m) => {
+    if (filterCategory !== 'all' && m.category !== filterCategory) {
+      return false;
+    }
+    if (!normalizedQuery) return true;
+    const haystack = [
+      m.name,
+      m.formula,
+      m.category,
+      m.pattern,
+      m.notes || '',
+    ]
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-2 sm:p-4">
@@ -129,6 +144,41 @@ export const MaterialsModal: React.FC<MaterialsModalProps> = ({
         <div className="flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
           {/* Left: Material List & Filter */}
           <div className="w-full md:w-3/5 border-b md:border-b-0 md:border-r border-slate-800 flex flex-col max-h-[42dvh] md:max-h-none shrink-0 md:shrink">
+            {/* Search input */}
+            <div className="px-2.5 pt-2.5 pb-1.5 bg-slate-950/60 border-b border-slate-800/80 flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape' && searchQuery) {
+                      e.stopPropagation();
+                      setSearchQuery('');
+                    }
+                  }}
+                  placeholder="Search by name, formula, or notes..."
+                  aria-label="Search semiconductor materials"
+                  className="w-full pl-8 pr-7 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-400 hover:text-white"
+                    aria-label="Clear material search"
+                    title="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <span className="text-[11px] font-mono text-slate-400 shrink-0">
+                {filtered.length}/{materials.length}
+              </span>
+            </div>
+
             {/* Category filter tabs */}
             <div className="flex items-center gap-1 p-2 bg-slate-950/60 border-b border-slate-800 text-xs overflow-x-auto">
               {['all', 'substrate', 'dielectric', 'metal', 'semiconductor', 'photoresist', 'polymer', 'custom'].map(
@@ -150,60 +200,80 @@ export const MaterialsModal: React.FC<MaterialsModalProps> = ({
 
             {/* List */}
             <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-              {filtered.map((mat) => {
-                const isSelected = editingMat?.id === mat.id;
-                return (
-                  <div
-                    key={mat.id}
+              {filtered.length === 0 ? (
+                <div className="py-8 px-4 text-center text-xs text-slate-400 space-y-2">
+                  <p>
+                    No materials match
+                    {searchQuery ? ` "${searchQuery.trim()}"` : ''}
+                    {filterCategory !== 'all' ? ` in ${filterCategory}` : ''}.
+                  </p>
+                  <button
+                    type="button"
                     onClick={() => {
-                      setEditingMat(mat);
-                      setName(mat.name);
-                      setFormula(mat.formula);
-                      setColor(mat.color);
-                      setPattern(mat.pattern);
-                      setCategory(mat.category);
-                      setDensity(mat.density?.toString() || '');
-                      setRefractiveIndex(mat.refractiveIndex?.toString() || '');
-                      setNotes(mat.notes || '');
-                      setCrystallineAnisotropic(isCrystallineKohMaterial(mat));
+                      setSearchQuery('');
+                      setFilterCategory('all');
                     }}
-                    className={`flex items-center justify-between p-2.5 rounded-xl text-xs cursor-pointer border transition-colors ${
-                      isSelected
-                        ? 'bg-sky-950/60 border-sky-500 text-white shadow-md'
-                        : 'bg-slate-950/40 border-slate-800 hover:bg-slate-800/40 text-slate-300'
-                    }`}
+                    className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sky-300 text-[11px] font-medium transition-colors"
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span
-                        className="w-4 h-4 rounded-md border border-white/20 flex-shrink-0"
-                        style={{ backgroundColor: mat.color }}
-                      />
-                      <div className="min-w-0">
-                        <div className="font-semibold truncate">{mat.name}</div>
-                        <div className="text-[11px] text-slate-400 font-mono">
-                          {mat.formula} · <span className="capitalize">{mat.category}</span>
+                    Reset search &amp; category
+                  </button>
+                </div>
+              ) : (
+                filtered.map((mat) => {
+                  const isSelected = editingMat?.id === mat.id;
+                  return (
+                    <div
+                      key={mat.id}
+                      onClick={() => {
+                        setEditingMat(mat);
+                        setName(mat.name);
+                        setFormula(mat.formula);
+                        setColor(mat.color);
+                        setPattern(mat.pattern);
+                        setCategory(mat.category);
+                        setDensity(mat.density?.toString() || '');
+                        setRefractiveIndex(mat.refractiveIndex?.toString() || '');
+                        setNotes(mat.notes || '');
+                        setCrystallineAnisotropic(isCrystallineKohMaterial(mat));
+                      }}
+                      className={`flex items-center justify-between p-2.5 rounded-xl text-xs cursor-pointer border transition-colors ${
+                        isSelected
+                          ? 'bg-sky-950/60 border-sky-500 text-white shadow-md'
+                          : 'bg-slate-950/40 border-slate-800 hover:bg-slate-800/40 text-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span
+                          className="w-4 h-4 rounded-md border border-white/20 flex-shrink-0"
+                          style={{ backgroundColor: mat.color }}
+                        />
+                        <div className="min-w-0">
+                          <div className="font-semibold truncate">{mat.name}</div>
+                          <div className="text-[11px] text-slate-400 font-mono">
+                            {mat.formula} · <span className="capitalize">{mat.category}</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="flex items-center gap-2 font-mono text-[11px] text-slate-400">
-                      <span className="capitalize">{mat.pattern}</span>
-                      {mat.isCustom && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(mat.id);
-                          }}
-                          className="p-1 text-slate-500 hover:text-rose-400 transition-colors"
-                          title="Delete custom material"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2 font-mono text-[11px] text-slate-400">
+                        <span className="capitalize">{mat.pattern}</span>
+                        {mat.isCustom && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDelete(mat.id);
+                            }}
+                            className="p-1 text-slate-500 hover:text-rose-400 transition-colors"
+                            title="Delete custom material"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
 

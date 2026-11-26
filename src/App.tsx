@@ -39,6 +39,7 @@ import { FlowImportMode } from './lib/flowImportUtils';
 import { SubstrateEditor } from './components/SubstrateEditor';
 import { resolveFlowParameters } from './lib/variableUtils';
 import { syncActiveVariantSnapshot } from './lib/variantUtils';
+import { PiecewiseZMode, CustomZZonesConfig } from './lib/piecewiseZScale';
 import {
   ensureFlowMasks,
   syncStepWindowsToMask,
@@ -128,6 +129,14 @@ export default function App() {
     } catch {
       return false;
     }
+  });
+  const [zScale, setZScale] = useState<number>(2.0);
+  const [zAspect1to1, setZAspect1to1] = useState<boolean>(false);
+  const [piecewiseZMode, setPiecewiseZMode] = useState<PiecewiseZMode>('linear');
+  const [piecewiseAutoCompression, setPiecewiseAutoCompression] = useState<number>(0.75);
+  const [piecewiseCustomConfig, setPiecewiseCustomConfig] = useState<CustomZZonesConfig>({
+    breakpointsNm: [],
+    zoneGains: [1],
   });
 
   // Modals state
@@ -255,6 +264,15 @@ export default function App() {
       // ignore
     }
   }, [lockSharedYScale]);
+
+  const prevFlowIdRef = useRef<string>(flow.id);
+  useEffect(() => {
+    if (prevFlowIdRef.current !== flow.id) {
+      prevFlowIdRef.current = flow.id;
+      setPiecewiseCustomConfig({ breakpointsNm: [], zoneGains: [1] });
+      setPiecewiseZMode((prev) => (prev === 'custom' ? 'auto' : prev));
+    }
+  }, [flow.id]);
 
   useEffect(() => {
     try {
@@ -1004,6 +1022,16 @@ export default function App() {
               sharedYBounds={sharedYBounds}
               lockSharedYScale={lockSharedYScale}
               onToggleLockSharedYScale={() => setLockSharedYScale((prev) => !prev)}
+              zScale={zScale}
+              onChangeZScale={setZScale}
+              zAspect1to1={zAspect1to1}
+              onChangeZAspect1to1={setZAspect1to1}
+              piecewiseMode={piecewiseZMode}
+              onChangePiecewiseMode={setPiecewiseZMode}
+              autoCompression={piecewiseAutoCompression}
+              onChangeAutoCompression={setPiecewiseAutoCompression}
+              customZConfig={piecewiseCustomConfig}
+              onChangeCustomZConfig={setPiecewiseCustomConfig}
               materials={flow.materials}
               waferWidth={flow.substrateWidth}
               flowId={flow.id}
@@ -1213,6 +1241,18 @@ export default function App() {
         <MultiStepFlowView
           flow={flow}
           thicknessUnit={thicknessUnit}
+          zScale={zScale}
+          onChangeZScale={setZScale}
+          zAspect1to1={zAspect1to1}
+          onChangeZAspect1to1={setZAspect1to1}
+          lockSharedYScale={lockSharedYScale}
+          onToggleLockSharedYScale={() => setLockSharedYScale((prev) => !prev)}
+          piecewiseMode={piecewiseZMode}
+          onChangePiecewiseMode={setPiecewiseZMode}
+          autoCompression={piecewiseAutoCompression}
+          onChangeAutoCompression={setPiecewiseAutoCompression}
+          customZConfig={piecewiseCustomConfig}
+          onChangeCustomZConfig={setPiecewiseCustomConfig}
           onSelectStepIndex={(idx) => setActiveStepIndex(idx)}
           onUpdateFlow={handleUpdateFlow}
           onOpenBatchExport={() => setShowBatchExport(true)}

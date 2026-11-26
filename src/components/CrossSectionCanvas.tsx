@@ -80,6 +80,16 @@ interface CrossSectionCanvasProps {
   sharedYBounds?: { minY: number; maxY: number };
   lockSharedYScale?: boolean;
   onToggleLockSharedYScale?: () => void;
+  zScale?: number;
+  onChangeZScale?: (next: number) => void;
+  zAspect1to1?: boolean;
+  onChangeZAspect1to1?: (next: boolean) => void;
+  piecewiseMode?: PiecewiseZMode;
+  onChangePiecewiseMode?: (next: PiecewiseZMode) => void;
+  autoCompression?: number;
+  onChangeAutoCompression?: (next: number) => void;
+  customZConfig?: CustomZZonesConfig;
+  onChangeCustomZConfig?: (next: CustomZZonesConfig) => void;
   materials: Material[];
   waferWidth: number; // nm
   flowId?: string;
@@ -133,6 +143,16 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   sharedYBounds,
   lockSharedYScale: lockSharedYScaleProp,
   onToggleLockSharedYScale,
+  zScale: zScaleProp,
+  onChangeZScale,
+  zAspect1to1: zAspect1to1Prop,
+  onChangeZAspect1to1,
+  piecewiseMode: piecewiseModeProp,
+  onChangePiecewiseMode,
+  autoCompression: autoCompressionProp,
+  onChangeAutoCompression,
+  customZConfig: customZConfigProp,
+  onChangeCustomZConfig,
   materials,
   waferWidth,
   flowId,
@@ -229,7 +249,14 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   const isAnyFullscreen = isFullscreen || isCssFullscreen;
 
   // Vertical Z-exaggeration factor (essential in semiconductor CAD)
-  const [zScale, setZScale] = useState<number>(2.0);
+  const [internalZScale, setInternalZScale] = useState<number>(2.0);
+  const zScale = zScaleProp ?? internalZScale;
+  const setZScale = onChangeZScale ?? setInternalZScale;
+
+  const [internalZAspect1to1, setInternalZAspect1to1] = useState<boolean>(false);
+  const zAspect1to1 = zAspect1to1Prop ?? internalZAspect1to1;
+  const setZAspect1to1 = onChangeZAspect1to1 ?? setInternalZAspect1to1;
+
   const [internalLockSharedYScale, setInternalLockSharedYScale] = useState<boolean>(() => {
     try {
       return localStorage.getItem('microflow_lock_shared_y_scale') === 'true';
@@ -249,12 +276,21 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   }, [internalLockSharedYScale, lockSharedYScaleProp]);
 
   // Piecewise Z-axis scaling for multi-order-of-magnitude layer stacks
-  const [piecewiseMode, setPiecewiseMode] = useState<PiecewiseZMode>('linear');
-  const [autoCompression, setAutoCompression] = useState<number>(0.75);
-  const [customZConfig, setCustomZConfig] = useState<CustomZZonesConfig>({
+  const [internalPiecewiseMode, setInternalPiecewiseMode] = useState<PiecewiseZMode>('linear');
+  const piecewiseMode = piecewiseModeProp ?? internalPiecewiseMode;
+  const setPiecewiseMode = onChangePiecewiseMode ?? setInternalPiecewiseMode;
+
+  const [internalAutoCompression, setInternalAutoCompression] = useState<number>(0.75);
+  const autoCompression = autoCompressionProp ?? internalAutoCompression;
+  const setAutoCompression = onChangeAutoCompression ?? setInternalAutoCompression;
+
+  const [internalCustomZConfig, setInternalCustomZConfig] = useState<CustomZZonesConfig>({
     breakpointsNm: [],
     zoneGains: [1],
   });
+  const customZConfig = customZConfigProp ?? internalCustomZConfig;
+  const setCustomZConfig = onChangeCustomZConfig ?? setInternalCustomZConfig;
+
   const [showPiecewisePopover, setShowPiecewisePopover] = useState<boolean>(false);
   const piecewiseMenuRef = useRef<HTMLDivElement>(null);
 
@@ -432,7 +468,11 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   const scaleX = effectiveContentWidth / waferWidth;
   // baseScaleY is normalized so that at 2.0x zScale, the wafer occupies ~62% of vertical contentHeight
   const baseScaleY = (effectiveContentHeight * 0.62) / (effectiveSpan * 2.0);
-  const scaleY = baseScaleY * zScale;
+  const effectiveZScale =
+    zAspect1to1 && baseScaleY > 0
+      ? Math.max(0.05, Math.min(250, scaleX / baseScaleY))
+      : zScale;
+  const scaleY = baseScaleY * effectiveZScale;
 
   const lockViewport = useCallback(() => {
     setLockedMetrics((prev) =>
@@ -725,7 +765,11 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
 
     const actualBaseScaleY = (contentHeight * 0.62) / (actualSpan * 2.0);
     const actualScaleX = contentWidth / waferWidth;
-    const actualScaleY = actualBaseScaleY * zScale;
+    const actualEffectiveZScale =
+      zAspect1to1 && actualBaseScaleY > 0
+        ? Math.max(0.05, Math.min(250, actualScaleX / actualBaseScaleY))
+        : zScale;
+    const actualScaleY = actualBaseScaleY * actualEffectiveZScale;
     const project = (x: number, y: number) => ({
       x: paddingX + x * actualScaleX,
       y: (svgHeight - bottomPadding) - (y - rawMinY) * actualScaleY,
@@ -766,6 +810,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     actualSpan,
     waferWidth,
     zScale,
+    zAspect1to1,
     zTransform,
     contentWidth,
     contentHeight,
@@ -780,9 +825,18 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   useEffect(() => {
     setLockedMetrics(null);
     setStackProbes([]);
-    setCustomZConfig({ breakpointsNm: [], zoneGains: [1] });
-    setPiecewiseMode((prev) => (prev === 'custom' ? 'auto' : prev));
-  }, [flowId]);
+    if (customZConfigProp === undefined) {
+      setInternalCustomZConfig({ breakpointsNm: [], zoneGains: [1] });
+    }
+    if (piecewiseModeProp === undefined) {
+      setInternalPiecewiseMode((prev) => (prev === 'custom' ? 'auto' : prev));
+    }
+  }, [flowId, customZConfigProp, piecewiseModeProp]);
+
+  // Clear locked viewport metrics when shared Y or piecewise mode changes (locally or from Process Figure)
+  useEffect(() => {
+    setLockedMetrics(null);
+  }, [lockSharedYScale, piecewiseMode]);
 
   const handleSeedCustomFromAuto = useCallback(() => {
     const bps = [...autoPreviewTransform.breakpoints];
@@ -795,7 +849,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     });
     setPiecewiseMode('custom');
     setLockedMetrics(null);
-  }, [autoPreviewTransform]);
+  }, [autoPreviewTransform, setCustomZConfig, setPiecewiseMode]);
 
   const handleChangePiecewiseMode = useCallback(
     (next: PiecewiseZMode) => {
@@ -806,7 +860,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
       setPiecewiseMode(next);
       setLockedMetrics(null);
     },
-    [customZConfig.breakpointsNm.length, autoPreviewTransform.isActive, handleSeedCustomFromAuto]
+    [customZConfig.breakpointsNm.length, autoPreviewTransform.isActive, handleSeedCustomFromAuto, setPiecewiseMode]
   );
 
   // Close Piecewise Z popover when clicking outside
@@ -946,11 +1000,34 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
 
   // Keyboard shortcuts: 'F' to fit to screen, 'Escape' to cancel region zoom / caliper
   useEffect(() => {
+    const hasBlockingOverlay = () => {
+      const overlays = document.querySelectorAll('.fixed.inset-0');
+      for (let i = 0; i < overlays.length; i++) {
+        const el = overlays[i];
+        if (el === cardRef.current || cardRef.current?.contains(el)) continue;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) return true;
+      }
+      return false;
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
+      if (e.defaultPrevented) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        target?.isContentEditable
+      ) {
         return;
       }
-      if (e.key === 'f' || e.key === 'F') {
+      if (hasBlockingOverlay()) return;
+
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
         e.preventDefault();
         fitToScreen();
       } else if (e.key === 'Escape') {
@@ -1825,19 +1902,39 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
           >
             <span className="text-[10px] text-slate-400 font-mono">Z:</span>
             <select
-              value={zScale.toFixed(1)}
+              value={zAspect1to1 ? 'aspect-1to1' : zScale.toFixed(1)}
               onChange={(e) => {
-                const nextZ = parseFloat(e.target.value);
-                if (lockedMetrics !== null && zScale > 0) {
+                const rawVal = e.target.value;
+                if (rawVal === 'aspect-1to1') {
+                  const nextEffZ =
+                    baseScaleY > 0
+                      ? Math.max(0.05, Math.min(250, scaleX / baseScaleY))
+                      : effectiveZScale;
+                  if (lockedMetrics !== null && effectiveZScale > 0) {
+                    const uyOld = (svgHeight / 2 - pan.y) / zoom;
+                    const uyNew =
+                      effectiveDatumScreenY -
+                      (effectiveDatumScreenY - uyOld) * (nextEffZ / effectiveZScale);
+                    setPan((p) => ({
+                      ...p,
+                      y: svgHeight / 2 - uyNew * zoom,
+                    }));
+                  }
+                  setZAspect1to1(true);
+                  return;
+                }
+                const nextZ = parseFloat(rawVal);
+                if (lockedMetrics !== null && effectiveZScale > 0) {
                   const uyOld = (svgHeight / 2 - pan.y) / zoom;
                   const uyNew =
                     effectiveDatumScreenY -
-                    (effectiveDatumScreenY - uyOld) * (nextZ / zScale);
+                    (effectiveDatumScreenY - uyOld) * (nextZ / effectiveZScale);
                   setPan((p) => ({
                     ...p,
                     y: svgHeight / 2 - uyNew * zoom,
                   }));
                 }
+                setZAspect1to1(false);
                 setZScale(nextZ);
               }}
               className="bg-transparent text-white font-mono text-[11px] focus:outline-none cursor-pointer"
@@ -1847,6 +1944,7 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
               <option value="2.0" className="bg-slate-900">2.0x</option>
               <option value="3.5" className="bg-slate-900">3.5x</option>
               <option value="5.0" className="bg-slate-900">5.0x</option>
+              <option value="aspect-1to1" className="bg-slate-900">1:1 (X=Y)</option>
             </select>
           </div>
 
@@ -3508,7 +3606,9 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
             const fSpanX = Math.max(100, fMaxX - fMinX);
             const fSpanY = Math.max(300, fMaxY - fMinY);
             const rawSx = availW / fSpanX;
-            const rawSy = (availH * 0.65 * (zScale / 2.0)) / fSpanY;
+            const rawSy = zAspect1to1
+              ? rawSx
+              : (availH * 0.65 * (zScale / 2.0)) / fSpanY;
             const rawWaferH = fSpanY * rawSy;
             const fitFactor = rawWaferH > availH ? availH / rawWaferH : 1;
             const insetSx = rawSx * fitFactor;

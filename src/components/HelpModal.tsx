@@ -335,7 +335,7 @@ const HELP_TOPICS: HelpTopic[] = [
         title: 'Process Figure & Batch Step Export',
         where: 'Top Toolbar → Process Figure · Batch Export',
         description:
-          'Compose multi-step publication figures across selected milestones or batch-export every step cross-section as individual SVG or PNG images.',
+          'Compose multi-step publication figures with synced Z scaling (1.0×–5.0× or 1:1 aspect), Shared Y vs. Per-Step Fit, and Piecewise Z-Map (Linear / Auto / Custom Zones), or batch-export every step cross-section as individual SVG or PNG images.',
       },
       {
         title: 'JSON Recipe Backup & Full Import',
