@@ -637,6 +637,68 @@ export function svgToPngBlob(
   });
 }
 
+export async function copySvgElementToClipboard(
+  svgEl: SVGSVGElement,
+  width: number,
+  height: number,
+  backgroundColor: string
+): Promise<'png' | 'svg'> {
+  const clone = svgEl.cloneNode(true) as SVGSVGElement;
+  if (!clone.getAttribute('xmlns')) {
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  }
+  if (!clone.getAttribute('viewBox')) {
+    clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  }
+  clone.setAttribute('width', String(Math.max(1, Math.round(width))));
+  clone.setAttribute('height', String(Math.max(1, Math.round(height))));
+
+  const serializer = new XMLSerializer();
+  const svgStr = serializer.serializeToString(clone);
+
+  const safeScale = Math.min(2, 12000 / Math.max(width, height, 1));
+
+  if (
+    typeof navigator !== 'undefined' &&
+    navigator.clipboard &&
+    typeof navigator.clipboard.write === 'function' &&
+    typeof ClipboardItem !== 'undefined'
+  ) {
+    try {
+      const pngBlobPromise = svgToPngBlob(svgStr, width, height, safeScale, backgroundColor);
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'image/png': pngBlobPromise,
+        }),
+      ]);
+      return 'png';
+    } catch {
+      try {
+        const pngBlob = await svgToPngBlob(svgStr, width, height, safeScale, backgroundColor);
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'image/png': pngBlob,
+          }),
+        ]);
+        return 'png';
+      } catch {
+        if (typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(svgStr);
+          return 'svg';
+        }
+        throw new Error('Clipboard write failed');
+      }
+    }
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(svgStr);
+    return 'svg';
+  }
+
+  throw new Error('Clipboard API is unavailable in this browser context.');
+}
+
 function triggerBlobDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

@@ -92,10 +92,10 @@ export const ParamBindingPanel: React.FC<ParamBindingPopoverProps> = ({
   return (
     <div
       onClick={(e) => e.stopPropagation()}
-      className="mt-1.5 p-2 rounded-lg bg-slate-950/95 border border-violet-500/45 shadow-xl space-y-2 text-[11px]"
+      className="mt-1 p-1.5 rounded-md bg-slate-950/95 border border-violet-500/45 shadow-xl space-y-1.5 text-[10.5px]"
     >
       <div className="flex items-center justify-between gap-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-300 flex items-center gap-1 truncate">
+        <span className="text-[9.5px] font-semibold uppercase tracking-wider text-violet-300 flex items-center gap-1 truncate">
           <VariableIcon className="w-3 h-3 text-violet-400 shrink-0" />
           <span className="truncate">{targetLabel ? `Bind ${targetLabel}` : 'Parametric Formula'}</span>
         </span>
@@ -107,7 +107,7 @@ export const ParamBindingPanel: React.FC<ParamBindingPopoverProps> = ({
                 onChangeExpression(undefined);
                 onClose();
               }}
-              className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-[10px]"
+              className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-[9.5px]"
               title="Unbind and keep current value as fixed number"
             >
               <Unlink className="w-2.5 h-2.5" />
@@ -141,13 +141,13 @@ export const ParamBindingPanel: React.FC<ParamBindingPopoverProps> = ({
           }}
           placeholder="e.g. gate_cd * 2 + 50nm"
           autoFocus
-          className="flex-1 min-w-0 px-2 py-1 rounded bg-slate-900 border border-slate-700 focus:border-violet-500 text-violet-200 font-mono text-[11px] focus:outline-none"
+          className="flex-1 min-w-0 px-2 py-0.5 rounded bg-slate-900 border border-slate-700 focus:border-violet-500 text-violet-200 font-mono text-[11px] focus:outline-none"
         />
         <button
           type="button"
           disabled={!draft.trim() || !preview?.ok}
           onClick={handleApply}
-          className="px-2 py-1 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white font-semibold text-[10px] flex items-center gap-0.5 shrink-0"
+          className="px-2 py-0.5 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white font-semibold text-[10px] flex items-center gap-0.5 shrink-0"
           title="Apply formula"
         >
           <Check className="w-3 h-3" />
@@ -319,11 +319,11 @@ export const ParametricThicknessInput: React.FC<ParametricThicknessInputProps> =
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
-            className="flex-1 min-w-0 flex items-center justify-between gap-1.5 px-2 py-1.5 rounded-lg bg-violet-950/35 border border-violet-500/50 text-left font-mono text-xs text-violet-200 hover:border-violet-400 transition-colors"
+            className="flex-1 min-w-0 flex items-center justify-between gap-1.5 px-2 py-1 rounded-md bg-violet-950/35 border border-violet-500/50 text-left font-mono text-[11px] text-violet-200 hover:border-violet-400 transition-colors tabular-nums"
             title={`Bound to: ${expression} = ${formatThickness(valueNm, unit)}`}
           >
             <span className="truncate font-semibold">{formatThickness(valueNm, unit)}</span>
-            <span className="text-[10px] text-violet-300/90 truncate max-w-[80px]">
+            <span className="text-[9.5px] text-violet-300/90 truncate max-w-[80px]">
               ={expression}
             </span>
           </button>

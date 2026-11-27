@@ -28,6 +28,7 @@ import {
   FileSpreadsheet,
   FileInput,
   HelpCircle,
+  Wrench,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -40,6 +41,7 @@ interface HeaderProps {
   onOpenImportFlow?: (initialMode?: 'steps-and-masks' | 'masks-only') => void;
   onOpenMaterials: () => void;
   onOpenEtchLibrary: () => void;
+  onOpenToolLibrary?: () => void;
   onOpenMaskLevels: () => void;
   onOpenVariables?: () => void;
   variableCount?: number;
@@ -71,6 +73,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenImportFlow,
   onOpenMaterials,
   onOpenEtchLibrary,
+  onOpenToolLibrary,
   onOpenMaskLevels,
   onOpenVariables,
   variableCount = 0,
@@ -443,6 +446,18 @@ export const Header: React.FC<HeaderProps> = ({
             <span>Etch Rates</span>
           </button>
 
+          {onOpenToolLibrary && (
+            <button
+              type="button"
+              onClick={onOpenToolLibrary}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium transition-colors"
+              title="Cleanroom Tool & Equipment Library (linked to mechanisms & sub-mechanisms)"
+            >
+              <Wrench className="w-3.5 h-3.5 text-sky-400" />
+              <span>Tool Library</span>
+            </button>
+          )}
+
           <button
             onClick={onOpenMaskLevels}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium transition-colors"
@@ -655,6 +670,19 @@ export const Header: React.FC<HeaderProps> = ({
                 <FlaskConical className="w-4 h-4 text-amber-400" />
                 <span>Etch Rate Library</span>
               </button>
+              {onOpenToolLibrary && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onOpenToolLibrary();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-slate-200 hover:bg-slate-800"
+                >
+                  <Wrench className="w-4 h-4 text-sky-400" />
+                  <span>Tool Library</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {

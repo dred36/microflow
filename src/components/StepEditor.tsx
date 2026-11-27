@@ -23,6 +23,7 @@ import {
   DesignVariable,
   VariableUnit,
   SacrificialReleaseRegion,
+  CleanroomTool,
 } from '../types/microfab';
 import { ThicknessUnit, getUnitLabel, formatThickness } from '../lib/units';
 import { resolveResistMaterialId, isCrystallineKohMaterial, getMaterialById } from '../lib/materials';
@@ -33,6 +34,15 @@ import {
   formatEtchRate,
   formatDurationCompact,
 } from '../lib/etchRates';
+import {
+  getCleanroomTools,
+  getCleanroomToolById,
+  getStepMechanismContext,
+  getToolMatchLevel,
+  getToolsForStep,
+  buildToolRecipeFromTool,
+  getMechanismLabel,
+} from '../lib/toolLibrary';
 import { getDefaultStepTitle } from '../lib/stepDefaults';
 import {
   createStepVariant,
@@ -92,6 +102,7 @@ import {
   Maximize2,
   X,
   HelpCircle,
+  FileText,
 } from 'lucide-react';
 
 interface StepEditorProps {
@@ -100,10 +111,12 @@ interface StepEditorProps {
   waferWidth: number;
   materials: Material[];
   etchRecipes?: EtchRecipe[];
+  tools?: CleanroomTool[];
   thicknessUnit?: ThicknessUnit;
   onUpdateStep: (updated: ProcessStep) => void;
   onOpenMaterialsModal: () => void;
   onOpenEtchLibrary?: () => void;
+  onOpenToolLibrary?: () => void;
   onMergeMaterials?: (materials: Material[]) => void;
   blocks?: ProcessBlock[];
   masks?: PhotomaskLevel[];
@@ -115,6 +128,8 @@ interface StepEditorProps {
   onOpenVariantManager?: () => void;
   pickReleaseMode?: boolean;
   onTogglePickReleaseMode?: () => void;
+  isMaskTrackOpen?: boolean;
+  onToggleMaskTrack?: () => void;
   onOpenHelp?: () => void;
 }
 
@@ -192,10 +207,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
   waferWidth,
   materials,
   etchRecipes,
+  tools: toolsProp,
   thicknessUnit = 'nm',
   onUpdateStep,
   onOpenMaterialsModal,
   onOpenEtchLibrary,
+  onOpenToolLibrary,
   onMergeMaterials,
   blocks,
   masks,
@@ -207,6 +224,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
   onOpenVariantManager,
   pickReleaseMode = false,
   onTogglePickReleaseMode,
+  isMaskTrackOpen = false,
+  onToggleMaskTrack,
   onOpenHelp,
 }) => {
   const [activeTab, setActiveTab] = useState<'process' | 'equipment' | 'notes'>('process');
@@ -388,6 +407,43 @@ export const StepEditor: React.FC<StepEditorProps> = ({
     });
   };
 
+  const allTools = useMemo(() => getCleanroomTools(toolsProp), [toolsProp]);
+  const stepMechContext = useMemo(() => getStepMechanismContext(step), [step]);
+  const groupedStepTools = useMemo(
+    () => getToolsForStep(allTools, step),
+    [allTools, step]
+  );
+  const linkedLibraryTool = useMemo(
+    () => getCleanroomToolById(allTools, step.toolRecipe?.toolId),
+    [allTools, step.toolRecipe?.toolId]
+  );
+  const linkedToolMatchLevel = useMemo(
+    () =>
+      linkedLibraryTool
+        ? getToolMatchLevel(
+            linkedLibraryTool,
+            stepMechContext.mechanism,
+            stepMechContext.subMechanisms
+          )
+        : null,
+    [linkedLibraryTool, stepMechContext]
+  );
+
+  const handleSelectLibraryTool = (nextToolId: string) => {
+    if (!nextToolId) {
+      if (step.toolRecipe) {
+        const { toolId: _removed, ...rest } = step.toolRecipe;
+        handleUpdate({ toolRecipe: rest });
+      }
+      return;
+    }
+    const found = allTools.find((t) => t.id === nextToolId);
+    if (!found) return;
+    handleUpdate({
+      toolRecipe: buildToolRecipeFromTool(found, step.toolRecipe),
+    });
+  };
+
   const handleUpdateRecipe = (field: keyof ToolRecipe, val: string) => {
     const current = step.toolRecipe || {
       toolName: '',
@@ -410,27 +466,27 @@ export const StepEditor: React.FC<StepEditorProps> = ({
   return (
     <div className="flex flex-col h-full min-w-0 bg-slate-900 text-slate-200">
       {/* Editor Header */}
-      <div className="p-4 border-b border-slate-800">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/30">
+      <div className="px-2.5 py-2 border-b border-slate-800 shrink-0">
+        <div className="flex items-center justify-between gap-1.5 mb-1.5">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[9.5px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/30 shrink-0">
               {step.type}
             </span>
-            <span className="text-xs text-slate-400 font-mono">Step Config</span>
+            <span className="text-[10.5px] text-slate-400 font-mono truncate">Config</span>
             {onOpenHelp && (
               <button
                 type="button"
                 onClick={onOpenHelp}
-                className="p-0.5 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition-colors"
+                className="p-0.5 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition-colors shrink-0"
                 title="Help: Process Step Models & Parameters"
                 aria-label="Help for Step Parameters"
               >
-                <HelpCircle className="w-3.5 h-3.5" />
+                <HelpCircle className="w-3 h-3" />
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() =>
@@ -439,7 +495,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   bookmarkLabel: !step.bookmarked ? step.bookmarkLabel : undefined,
                 })
               }
-              className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border transition-colors ${
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] font-medium border transition-colors ${
                 step.bookmarked
                   ? 'bg-amber-500/15 border-amber-500/45 text-amber-300 hover:bg-amber-500/25'
                   : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-amber-300 hover:border-slate-700'
@@ -451,12 +507,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
               }
             >
               <Bookmark
-                className={`w-3 h-3 ${step.bookmarked ? 'fill-amber-400 text-amber-400' : ''}`}
+                className={`w-2.5 h-2.5 ${step.bookmarked ? 'fill-amber-400 text-amber-400' : ''}`}
               />
               <span>{step.bookmarked ? 'Bookmarked' : 'Bookmark'}</span>
             </button>
 
-            <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer">
+            <label className="flex items-center gap-1 text-[11px] text-slate-300 cursor-pointer">
               <input
                 type="checkbox"
                 checked={step.enabled}
@@ -474,14 +530,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
           value={step.title}
           onChange={(e) => handleUpdate({ title: e.target.value })}
           placeholder="Step title..."
-          className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-white font-medium text-sm focus:outline-none focus:border-sky-500 transition-colors"
+          className="w-full px-2 py-1 rounded-md bg-slate-950 border border-slate-700 text-white font-semibold text-xs focus:outline-none focus:border-sky-500 transition-colors"
         />
 
         {/* Milestone Bookmark Label (when bookmarked) */}
         {step.bookmarked && (
-          <div className="mt-2 flex items-center gap-2">
-            <span className="text-[11px] text-amber-300 shrink-0 font-medium flex items-center gap-1">
-              <Bookmark className="w-3 h-3 fill-amber-400 text-amber-400" />
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="text-[10.5px] text-amber-300 shrink-0 font-medium flex items-center gap-1">
+              <Bookmark className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
               Milestone:
             </span>
             <input
@@ -490,21 +546,21 @@ export const StepEditor: React.FC<StepEditorProps> = ({
               onChange={(e) =>
                 handleUpdate({ bookmarkLabel: e.target.value || undefined })
               }
-              placeholder="Optional milestone tag (e.g. Gate Stack, Via Open)..."
-              className="min-w-0 flex-1 px-2 py-1 rounded bg-slate-950 border border-amber-500/40 text-xs text-amber-100 placeholder-slate-500 focus:outline-none focus:border-amber-400"
+              placeholder="Optional milestone tag (e.g. Gate Stack)..."
+              className="min-w-0 flex-1 px-2 py-0.5 rounded bg-slate-950 border border-amber-500/40 text-[11px] text-amber-100 placeholder-slate-500 focus:outline-none focus:border-amber-400"
             />
           </div>
         )}
 
         {/* Fabrication Block / Module Assignment */}
-        <div className="mt-2.5 flex items-center gap-2 min-w-0">
-          <span className="text-[11px] text-slate-400 shrink-0 font-medium">Module:</span>
+        <div className="mt-1.5 flex items-center gap-1.5 min-w-0">
+          <span className="text-[10.5px] text-slate-400 shrink-0 font-medium">Module:</span>
           <select
             value={step.blockId || 'none'}
             onChange={(e) =>
               handleUpdate({ blockId: e.target.value === 'none' ? undefined : e.target.value })
             }
-            className="min-w-0 flex-1 w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono truncate"
+            className="min-w-0 flex-1 w-full px-2 py-0.5 rounded bg-slate-950 border border-slate-700 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500 font-mono truncate"
           >
             <option value="none">-- Ungrouped Operation --</option>
             {blocks?.map((b) => (
@@ -520,17 +576,17 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 setInlineBlockName(`Module ${(blocks?.length || 0) + 1}: `);
                 setIsAddingBlockInline(!isAddingBlockInline);
               }}
-              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 border border-slate-700 text-xs transition-colors shrink-0"
+              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-sky-400 border border-slate-700 text-xs transition-colors shrink-0"
               title="Create new fabrication block / module"
             >
-              <Plus className="w-3.5 h-3.5" />
+              <Plus className="w-3 h-3" />
             </button>
           )}
         </div>
 
         {/* Inline Module Creation Row */}
         {isAddingBlockInline && (
-          <div className="flex items-center gap-1.5 mt-2 p-1.5 rounded-lg bg-slate-950 border border-sky-500/60 animate-in fade-in zoom-in-95 duration-100">
+          <div className="flex items-center gap-1 mt-1.5 p-1 rounded-md bg-slate-950 border border-sky-500/60 animate-in fade-in zoom-in-95 duration-100">
             <input
               type="text"
               autoFocus
@@ -548,7 +604,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 }
               }}
               placeholder="e.g. Module 3: Interconnect"
-              className="flex-1 px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-500 font-medium"
+              className="flex-1 px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-[11px] text-white focus:outline-none focus:border-sky-500 font-medium"
             />
             <button
               type="button"
@@ -559,7 +615,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   setInlineBlockName('');
                 }
               }}
-              className="px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-semibold transition-colors"
+              className="px-2 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-[10.5px] font-semibold transition-colors"
             >
               Create
             </button>
@@ -569,7 +625,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 setIsAddingBlockInline(false);
                 setInlineBlockName('');
               }}
-              className="p-1 rounded text-slate-400 hover:text-white text-xs"
+              className="p-0.5 rounded text-slate-400 hover:text-white text-xs"
             >
               ✕
             </button>
@@ -582,19 +638,19 @@ export const StepEditor: React.FC<StepEditorProps> = ({
           const activeVariant = getActiveStepVariant(step);
           if (!variants || variants.length <= 1) {
             return (
-              <div className="mt-2.5 flex items-center justify-between gap-2">
-                <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5">
-                  <GitBranch className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <span className="text-[10.5px] text-slate-400 font-medium flex items-center gap-1">
+                  <GitBranch className="w-3 h-3 text-violet-400 shrink-0" />
                   <span>Variants:</span>
                   <span className="text-slate-500 font-normal">Single recipe</span>
                 </span>
                 <button
                   type="button"
                   onClick={() => onUpdateStep(createStepVariant(step))}
-                  className="flex items-center gap-1 px-2 py-1 rounded-lg bg-violet-500/15 hover:bg-violet-500/25 border border-violet-500/35 text-[11px] font-medium text-violet-300 transition-colors"
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-violet-500/15 hover:bg-violet-500/25 border border-violet-500/35 text-[10.5px] font-medium text-violet-300 transition-colors"
                   title="Branch this step with an alternative parameter variant (e.g. Baseline vs Variant B)"
                 >
-                  <Plus className="w-3 h-3" />
+                  <Plus className="w-2.5 h-2.5" />
                   <span>Add Variant</span>
                 </button>
               </div>
@@ -602,12 +658,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
           }
 
           return (
-            <div className="mt-2.5 p-2 rounded-xl bg-slate-950/90 border border-violet-500/35 space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-violet-300">
-                  <GitBranch className="w-3.5 h-3.5 text-violet-400 shrink-0" />
-                  <span>Step Variants</span>
-                  <span className="px-1.5 py-0.2 rounded bg-violet-500/20 border border-violet-500/30 font-mono text-[10px] text-violet-200">
+            <div className="mt-1.5 p-1.5 rounded-lg bg-slate-950/90 border border-violet-500/35 space-y-1.5">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="flex items-center gap-1 text-[10.5px] font-semibold text-violet-300">
+                  <GitBranch className="w-3 h-3 text-violet-400 shrink-0" />
+                  <span>Variants</span>
+                  <span className="px-1 py-0.2 rounded bg-violet-500/20 border border-violet-500/30 font-mono text-[9.5px] text-violet-200 tabular-nums">
                     {variants.length}
                   </span>
                 </div>
@@ -616,16 +672,16 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     <button
                       type="button"
                       onClick={onOpenVariantManager}
-                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] text-violet-300 transition-colors"
+                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9.5px] text-violet-300 transition-colors"
                       title="Open centralized Variant Manager for all steps"
                     >
-                      Manage All
+                      Manage
                     </button>
                   )}
                   <button
                     type="button"
                     onClick={() => onUpdateStep(duplicateStepVariant(step))}
-                    className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] text-slate-300 transition-colors"
+                    className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9.5px] text-slate-300 transition-colors"
                     title="Duplicate active variant"
                   >
                     <Copy className="w-2.5 h-2.5" />
@@ -634,16 +690,16 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   <button
                     type="button"
                     onClick={() => onUpdateStep(createStepVariant(step))}
-                    className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-violet-600/80 hover:bg-violet-500 text-[10px] font-semibold text-white transition-colors"
+                    className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-violet-600/80 hover:bg-violet-500 text-[9.5px] font-semibold text-white transition-colors"
                     title="Create a new parameter variant"
                   >
-                    <Plus className="w-3 h-3" />
+                    <Plus className="w-2.5 h-2.5" />
                     <span>New</span>
                   </button>
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1">
                 {variants.map((variant) => {
                   const isActive = activeVariant?.id === variant.id;
                   const isEditingThis = editingVariantId === variant.id;
@@ -652,7 +708,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     return (
                       <div
                         key={variant.id}
-                        className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-slate-900 border border-violet-400"
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 border border-violet-400"
                       >
                         <input
                           type="text"
@@ -675,7 +731,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             }
                             setEditingVariantId(null);
                           }}
-                          className="w-24 bg-transparent text-[11px] font-medium text-white focus:outline-none"
+                          className="w-24 bg-transparent text-[10.5px] font-medium text-white focus:outline-none"
                         />
                         <button
                           type="button"
@@ -698,7 +754,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   return (
                     <div
                       key={variant.id}
-                      className={`group inline-flex items-center gap-1 rounded-lg border text-[11px] transition-all ${
+                      className={`group inline-flex items-center gap-0.5 rounded border text-[10.5px] transition-all ${
                         isActive
                           ? 'bg-violet-600/25 border-violet-400/80 text-white shadow-sm'
                           : 'bg-slate-900/90 border-slate-700/80 text-slate-300 hover:border-slate-500 hover:text-white'
@@ -715,7 +771,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           setEditingVariantId(variant.id);
                           setEditingVariantName(variant.name);
                         }}
-                        className="px-2 py-1 font-medium truncate max-w-[130px] text-left"
+                        className="px-1.5 py-0.5 font-medium truncate max-w-[120px] text-left"
                         title={`${variant.name} (${variant.type})${isActive ? ' — Active (double-click to rename)' : ' — Click to activate'}`}
                       >
                         {variant.name}
@@ -738,7 +794,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       <button
                         type="button"
                         onClick={() => onUpdateStep(deleteStepVariant(step, variant.id))}
-                        className={`pr-1.5 py-0.5 rounded transition-colors ${
+                        className={`pr-1 py-0.5 rounded transition-colors ${
                           isActive
                             ? 'text-violet-300/80 hover:text-rose-300'
                             : 'text-slate-500 opacity-0 group-hover:opacity-100 hover:text-rose-400'
@@ -760,37 +816,58 @@ export const StepEditor: React.FC<StepEditorProps> = ({
         })()}
 
         {/* Navigation Tabs */}
-        <div className="flex items-center gap-1 mt-3 p-1 rounded-lg bg-slate-950 border border-slate-800 text-xs">
+        <div className="flex items-center gap-0.5 mt-2 p-0.5 rounded-md bg-slate-950 border border-slate-800 text-[11px]">
           <button
+            type="button"
             onClick={() => setActiveTab('process')}
-            className={`flex-1 py-1 rounded-md font-medium transition-colors ${
+            className={`flex-1 py-0.5 px-1.5 rounded font-medium whitespace-nowrap transition-colors ${
               activeTab === 'process'
                 ? 'bg-sky-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Process Physics
+            Process
           </button>
           <button
+            type="button"
             onClick={() => setActiveTab('equipment')}
-            className={`flex-1 py-1 rounded-md font-medium transition-colors ${
+            className={`flex-1 py-0.5 px-1.5 rounded font-medium whitespace-nowrap transition-colors ${
               activeTab === 'equipment'
                 ? 'bg-sky-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Tool & Recipe SOP
+            Tool SOP
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('notes')}
+            className={`flex-1 py-0.5 px-1.5 rounded font-medium whitespace-nowrap transition-colors flex items-center justify-center gap-1 ${
+              activeTab === 'notes'
+                ? 'bg-sky-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>Notes</span>
+            {Boolean(step.notes?.trim()) && (
+              <span
+                className={`w-1.5 h-1.5 rounded-xs shrink-0 ${
+                  activeTab === 'notes' ? 'bg-white' : 'bg-cyan-400'
+                }`}
+                title="This step has documentation notes"
+              />
+            )}
           </button>
         </div>
       </div>
 
       {/* Tab Contents */}
-      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-4 space-y-4">
+      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-2.5 space-y-2.5">
         {activeTab === 'process' && (
           <>
             {/* Step Type Selector */}
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              <label className="block text-[10.5px] font-medium text-slate-400 mb-0.5">
                 Process Mechanism
               </label>
               <select
@@ -918,7 +995,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   }
                   handleUpdate(patch);
                 }}
-                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-200 text-xs font-medium focus:outline-none focus:border-sky-500"
+                className="w-full px-2 py-1 rounded-md bg-slate-950 border border-slate-700 text-slate-200 text-[11px] font-medium focus:outline-none focus:border-sky-500"
               >
                 <option value="deposition">Deposition / Thin Film Growth</option>
                 <option value="lithography">Photolithography &amp; Patterning</option>
@@ -934,23 +1011,112 @@ export const StepEditor: React.FC<StepEditorProps> = ({
               </select>
             </div>
 
+            {/* Linked Cleanroom Tool (filtered by Process Mechanism & Sub-Mechanism) */}
+            <div className="p-2 rounded-lg bg-slate-950/70 border border-slate-800 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <label className="flex items-center gap-1 text-[10.5px] font-medium text-slate-300 min-w-0">
+                  <Wrench className="w-3 h-3 text-sky-400 shrink-0" />
+                  <span className="shrink-0">Cleanroom Tool</span>
+                  <span className="text-[9.5px] font-mono text-slate-500 truncate">
+                    ({getMechanismLabel(stepMechContext.mechanism, true)}
+                    {stepMechContext.primarySubLabel ? ` · ${stepMechContext.primarySubLabel}` : ''})
+                  </span>
+                </label>
+                {onOpenToolLibrary && (
+                  <button
+                    type="button"
+                    onClick={onOpenToolLibrary}
+                    className="text-[10.5px] text-sky-400 hover:underline shrink-0"
+                  >
+                    Library
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={step.toolRecipe?.toolId || ''}
+                  onChange={(e) => handleSelectLibraryTool(e.target.value)}
+                  aria-label="Select linked cleanroom tool"
+                  className="flex-1 min-w-0 px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
+                >
+                  <option value="">-- Custom / Unlinked Tool --</option>
+                  {groupedStepTools.exactMatches.length > 0 && (
+                    <optgroup
+                      label={`Matched (${
+                        stepMechContext.primarySubLabel ||
+                        getMechanismLabel(stepMechContext.mechanism, true)
+                      })`}
+                    >
+                      {groupedStepTools.exactMatches.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                          {t.bayLocation ? ` · ${t.bayLocation}` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {groupedStepTools.mechanismMatches.length > 0 && (
+                    <optgroup
+                      label={`Other ${getMechanismLabel(stepMechContext.mechanism, true)} Tools`}
+                    >
+                      {groupedStepTools.mechanismMatches.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {groupedStepTools.otherTools.length > 0 && (
+                    <optgroup label="All Other Cleanroom Tools">
+                      {groupedStepTools.otherTools.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </div>
+
+              {linkedLibraryTool && linkedToolMatchLevel === null && (
+                <div className="flex items-center justify-between gap-2 pt-1 text-[10.5px] text-amber-300">
+                  <span className="truncate">
+                    Linked tool isn&apos;t tagged for{' '}
+                    {stepMechContext.primarySubLabel ||
+                      getMechanismLabel(stepMechContext.mechanism, true)}
+                    .
+                  </span>
+                  {groupedStepTools.exactMatches[0] && (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectLibraryTool(groupedStepTools.exactMatches[0].id)}
+                      className="px-1.5 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 font-medium shrink-0"
+                    >
+                      Use {groupedStepTools.exactMatches[0].name.split(' ')[0]}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Wafer Processing Side Selector (Front / Back / Both) */}
             {step.type !== 'substrate' && step.type !== 'anneal' && (
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-medium text-slate-400">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10.5px] font-medium text-slate-400">
                     {step.type === 'bonding'
                       ? 'Bond Target Side'
                       : step.type === 'tape-frame'
                       ? 'Tape Lamination Side'
                       : 'Substrate Side'}
                   </label>
-                  <span className="text-[10px] font-mono text-slate-500">
+                  <span className="text-[9.5px] font-mono text-slate-500">
                     {(step.side || 'front') === 'front'
-                      ? 'Top Surface (+Z)'
+                      ? 'Top (+Z)'
                       : step.side === 'back'
-                      ? 'Backside (-Z)'
-                      : 'Double-Sided (±Z)'}
+                      ? 'Back (-Z)'
+                      : 'Double (±Z)'}
                   </span>
                 </div>
                 <div
@@ -958,7 +1124,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     step.type === 'bonding' || step.type === 'tape-frame'
                       ? 'grid-cols-2'
                       : 'grid-cols-3'
-                  } gap-1 p-1 rounded-lg bg-slate-950 border border-slate-800 text-xs`}
+                  } gap-0.5 p-0.5 rounded-md bg-slate-950 border border-slate-800 text-[11px]`}
                 >
                   {(
                     [
@@ -983,13 +1149,13 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         key={opt.id}
                         type="button"
                         onClick={() => handleUpdate({ side: opt.id })}
-                        className={`flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md font-medium transition-all ${
+                        className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded font-medium transition-all ${
                           isActive
                             ? opt.activeClass
                             : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                         }`}
                       >
-                        <Icon className="w-3.5 h-3.5 shrink-0" />
+                        <Icon className="w-3 h-3 shrink-0" />
                         <span>{opt.label}</span>
                       </button>
                     );
@@ -1000,23 +1166,23 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
             {/* Customization for DEPOSITION */}
             {step.type === 'deposition' && (
-              <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
+              <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-sky-400">
+                  <label className="text-[11px] font-semibold text-sky-400">
                     Deposition Material
                   </label>
                   <button
                     onClick={onOpenMaterialsModal}
-                    className="text-[11px] text-sky-400 hover:underline"
+                    className="text-[10.5px] text-sky-400 hover:underline"
                   >
-                    + Manage Materials
+                    + Materials
                   </button>
                 </div>
 
                 <select
                   value={step.materialId || 'mat_sio2_thermal'}
                   onChange={(e) => handleUpdate({ materialId: e.target.value })}
-                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                  className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                 >
                   {materials.map((m) => (
                     <option key={m.id} value={m.id}>
@@ -1025,9 +1191,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   ))}
                 </select>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Film Thickness ({getUnitLabel(thicknessUnit)})
                     </label>
                     <ParametricThicknessInput
@@ -1048,7 +1214,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       unit={thicknessUnit}
                       minNm={5}
                       stepNm={10}
-                      className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                       expression={step.paramBindings?.['deposition.thickness']}
                       variables={variables}
                       waferWidth={waferWidth}
@@ -1061,7 +1227,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Deposition Method
                     </label>
                     <select
@@ -1120,7 +1286,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           },
                         });
                       }}
-                      className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                     >
                       <option value="PECVD">PECVD</option>
                       <option value="LPCVD">LPCVD</option>
@@ -1137,7 +1303,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
+                  <label className="block text-[10.5px] text-slate-400 mb-0.5">
                     Conformity & Topography Coverage
                   </label>
                   <select
@@ -1154,7 +1320,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         },
                       })
                     }
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                    className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                   >
                     <option value="conformal">Conformal (Uniform sidewalls & top)</option>
                     <option value="directional">Directional (Line-of-sight, E-Beam)</option>
@@ -1166,12 +1332,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 </div>
 
                 {step.deposition?.depositionType === 'spin-coat' && (
-                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
-                    <div className="flex items-center justify-between text-[11px]">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <div className="flex items-center justify-between text-[10.5px]">
                       <span className="text-slate-300 font-medium">
-                        Planarization (Viscosity vs Topography)
+                        Planarization (Viscosity)
                       </span>
-                      <span className="font-mono text-sky-400">
+                      <span className="font-mono text-sky-400 tabular-nums">
                         {step.deposition?.planarization ?? 100}%{' '}
                         {(step.deposition?.planarization ?? 100) >= 95
                           ? '(Ideal Flat)'
@@ -1225,7 +1391,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 },
                               })
                             }
-                            className={`flex-1 py-1 rounded text-[10px] font-mono border transition-colors ${
+                            className={`flex-1 py-0.5 rounded text-[9.5px] font-mono border transition-colors ${
                               active
                                 ? 'bg-sky-500/20 border-sky-500/60 text-sky-300'
                                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -1236,7 +1402,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         );
                       })}
                     </div>
-                    <p className="text-[10px] text-slate-400 leading-snug">
+                    <p className="text-[9.5px] text-slate-400 leading-tight">
                       {(step.deposition?.planarization ?? 100) >= 95
                         ? 'Ideal planarization: levels completely flat across all steps and valleys.'
                         : 'Models non-ideal viscous spin-coating: capillary forces fill narrow trenches faster while wider topography steps sag and dish.'}
@@ -1246,12 +1412,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                 {(step.deposition?.method === 'Dry Film Lamination' ||
                   step.deposition?.depositionType === 'dry-film') && (
-                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
-                    <div className="flex items-center justify-between text-[11px]">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <div className="flex items-center justify-between text-[10.5px]">
                       <span className="text-slate-300 font-medium">
                         Vacuum / Roll Conformality (Sag)
                       </span>
-                      <span className="font-mono text-sky-400">
+                      <span className="font-mono text-sky-400 tabular-nums">
                         {step.deposition?.laminationSag ?? 0}%{' '}
                         {(step.deposition?.laminationSag ?? 0) === 0
                           ? '(Rigid Tent)'
@@ -1303,7 +1469,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 },
                               })
                             }
-                            className={`flex-1 py-1 rounded text-[10px] font-mono border transition-colors ${
+                            className={`flex-1 py-0.5 rounded text-[9.5px] font-mono border transition-colors ${
                               active
                                 ? 'bg-sky-500/20 border-sky-500/60 text-sky-300'
                                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -1314,7 +1480,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         );
                       })}
                     </div>
-                    <p className="text-[10px] text-slate-400 leading-snug">
+                    <p className="text-[9.5px] text-slate-400 leading-tight">
                       {(step.deposition?.laminationSag ?? 0) === 0
                         ? 'Laminates as a flat rigid sheet over peaks, tenting across channels & cavities to form sealed voids.'
                         : 'Bridges narrow trenches while smoothly draping onto wider open terraces under roller/vacuum pressure.'}
@@ -1335,9 +1501,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       }
                       if (filmCandidates.length === 0) return null;
                       return (
-                        <div className="p-2 rounded-lg bg-sky-950/30 border border-sky-500/30 space-y-1.5">
-                          <div className="text-[10px] text-sky-300 leading-snug">
-                            Selected material ({activeMat?.name || 'dielectric'}) is inorganic. Quick-select a dry film sheet:
+                        <div className="p-1.5 rounded-md bg-sky-950/30 border border-sky-500/30 space-y-1">
+                          <div className="text-[9.5px] text-sky-300 leading-tight">
+                            Selected material ({activeMat?.name || 'dielectric'}) is inorganic. Quick-select dry film:
                           </div>
                           <div className="flex flex-wrap gap-1">
                             {filmCandidates.slice(0, 4).map((m) => (
@@ -1345,7 +1511,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 key={m.id}
                                 type="button"
                                 onClick={() => handleUpdate({ materialId: m.id })}
-                                className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[10px] text-slate-200 font-mono"
+                                className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[9.5px] text-slate-200 font-mono"
                               >
                                 {m.name}
                               </button>
@@ -1359,8 +1525,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                 {(step.deposition?.method === 'Electroplating' ||
                   step.deposition?.method === 'Electroless Plating') && (
-                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
-                    <label className="flex items-start gap-2 cursor-pointer">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <label className="flex items-start gap-1.5 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={Boolean(step.deposition?.platingSelective)}
@@ -1377,21 +1543,21 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         className="mt-0.5 rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0"
                       />
                       <div>
-                        <span className="text-[11px] font-medium text-slate-200 block">
+                        <span className="text-[10.5px] font-medium text-slate-200 block leading-tight">
                           Selective Seed-Surface Plating
                         </span>
-                        <span className="text-[10px] text-slate-400 leading-snug block">
-                          Plates only onto exposed seed/conductive regions; skips photoresist molds &amp; dielectrics.
+                        <span className="text-[9.5px] text-slate-400 leading-tight block">
+                          Plates only onto exposed seed/conductive regions; skips photoresist &amp; dielectrics.
                         </span>
                       </div>
                     </label>
 
                     {step.deposition?.platingSelective && (
                       <div className="space-y-1">
-                        <span className="text-[10px] text-slate-400 block font-medium">
+                        <span className="text-[9.5px] text-slate-400 block font-medium">
                           Active Plating Seed Surfaces
                         </span>
-                        <div className="grid grid-cols-2 gap-1.5 bg-slate-900 p-1 rounded-lg border border-slate-800 text-[10px]">
+                        <div className="grid grid-cols-2 gap-1 bg-slate-900 p-0.5 rounded-md border border-slate-800 text-[10px]">
                           <button
                             type="button"
                             onClick={() =>
@@ -1402,7 +1568,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 },
                               })
                             }
-                            className={`py-1 px-2 rounded font-medium transition-colors ${
+                            className={`py-0.5 px-1.5 rounded font-medium transition-colors ${
                               (step.deposition?.platingSeedScope ?? 'conductive') ===
                               'conductive'
                                 ? 'bg-sky-600 text-white'
@@ -1421,7 +1587,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 },
                               })
                             }
-                            className={`py-1 px-2 rounded font-medium transition-colors ${
+                            className={`py-0.5 px-1.5 rounded font-medium transition-colors ${
                               step.deposition?.platingSeedScope === 'metal-only'
                                 ? 'bg-sky-600 text-white'
                                 : 'text-slate-400 hover:text-slate-200'
@@ -1444,9 +1610,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         return null;
                       }
                       return (
-                        <div className="p-2 rounded-lg bg-amber-950/30 border border-amber-500/30 space-y-1.5">
-                          <div className="text-[10px] text-amber-300 leading-snug">
-                            Selected material ({activeMat?.name || 'oxide'}) is non-metallic. Quick-select a plated metal:
+                        <div className="p-1.5 rounded-md bg-amber-950/30 border border-amber-500/30 space-y-1">
+                          <div className="text-[9.5px] text-amber-300 leading-tight">
+                            Selected material ({activeMat?.name || 'oxide'}) is non-metallic. Quick-select metal:
                           </div>
                           <div className="flex flex-wrap gap-1">
                             {metalCandidates.map((m) => (
@@ -1454,7 +1620,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 key={m.id}
                                 type="button"
                                 onClick={() => handleUpdate({ materialId: m.id })}
-                                className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[10px] text-slate-200 font-mono"
+                                className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[9.5px] text-slate-200 font-mono"
                               >
                                 {m.formula}
                               </button>
@@ -1467,12 +1633,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 )}
 
                 {step.deposition?.depositionType === 'directional' && (
-                  <div className="pt-2.5 border-t border-slate-800 space-y-2">
-                    <div className="flex items-center justify-between text-[11px]">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <div className="flex items-center justify-between text-[10.5px]">
                       <span className="text-slate-300 font-medium">
                         Substrate Tilt Angle
                       </span>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         {(step.deposition?.tiltAngle ?? 0) !== 0 && (
                           <button
                             type="button"
@@ -1484,12 +1650,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 },
                               })
                             }
-                            className="text-[10px] text-slate-400 hover:text-sky-400 underline"
+                            className="text-[9.5px] text-slate-400 hover:text-sky-400 underline"
                           >
                             Reset 0°
                           </button>
                         )}
-                        <span className="font-mono text-sky-400">
+                        <span className="font-mono text-sky-400 tabular-nums">
                           {(step.deposition?.tiltAngle ?? 0) > 0
                             ? `+${step.deposition?.tiltAngle}°`
                             : `${step.deposition?.tiltAngle ?? 0}°`}
@@ -1527,7 +1693,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 },
                               })
                             }
-                            className={`flex-1 py-1 rounded text-[10px] font-mono border transition-colors ${
+                            className={`flex-1 py-0.5 rounded text-[9.5px] font-mono border transition-colors ${
                               active
                                 ? 'bg-sky-500/20 border-sky-500/60 text-sky-300'
                                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -1538,7 +1704,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         );
                       })}
                     </div>
-                    <p className="text-[10px] text-slate-400 leading-snug">
+                    <p className="text-[9.5px] text-slate-400 leading-tight">
                       {(step.deposition?.tiltAngle ?? 0) === 0
                         ? 'Normal incidence (vertical flux only, no sidewall coating).'
                         : (step.deposition?.tiltAngle ?? 0) > 0
@@ -1550,9 +1716,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                 {step.deposition?.depositionType === 'semi-conformal' && (
                   <div>
-                    <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                    <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
                       <span>Sidewall Step Coverage</span>
-                      <span className="font-mono text-sky-400">
+                      <span className="font-mono text-sky-400 tabular-nums">
                         {step.deposition?.stepCoverage ?? 60}%
                       </span>
                     </div>
@@ -1576,8 +1742,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                 {((step.deposition?.depositionType || 'conformal') === 'conformal' ||
                   step.deposition?.depositionType === 'semi-conformal') && (
-                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
-                    <label className="flex items-start gap-2 cursor-pointer">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <label className="flex items-start gap-1.5 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={Boolean(step.deposition?.convexCornerEffect)}
@@ -1598,20 +1764,20 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         className="mt-0.5 rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0"
                       />
                       <div>
-                        <span className="text-[11px] font-medium text-slate-200 block">
+                        <span className="text-[10.5px] font-medium text-slate-200 block leading-tight">
                           Faster Deposition at Convex Corners
                         </span>
-                        <span className="text-[10px] text-slate-400 leading-snug block">
-                          Outer/convex step corners receive wider precursor flux and build thicker film (bread-loafing).
+                        <span className="text-[9.5px] text-slate-400 leading-tight block">
+                          Outer step corners receive wider precursor flux and build thicker film (bread-loafing).
                         </span>
                       </div>
                     </label>
 
                     {step.deposition?.convexCornerEffect && (
                       <div>
-                        <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                        <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
                           <span>Corner Rate Boost</span>
-                          <span className="font-mono text-sky-400">
+                          <span className="font-mono text-sky-400 tabular-nums">
                             +{Math.round((step.deposition?.convexCornerStrength ?? 0.6) * 100)}%{' '}
                             {(step.deposition?.convexCornerStrength ?? 0.6) < 0.4
                               ? '(Mild)'
@@ -1645,22 +1811,19 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
             {/* Customization for LITHOGRAPHY */}
             {step.type === 'lithography' && (
-              <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800 min-w-0">
+              <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800 min-w-0">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-xs font-semibold text-rose-400">
-                    Photoresist & Exposure
-                  </span>
-                  <span className="text-[10px] text-slate-500 font-mono">
-                    Mask apertures edited on canvas track
+                  <span className="text-[11px] font-semibold text-rose-400">
+                    Photoresist &amp; Exposure
                   </span>
                 </div>
 
                 {/* Mask Level Linking / Reticle Assignment */}
-                <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-2 min-w-0">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <span className="text-[11px] font-semibold text-sky-400 flex items-center gap-1.5 min-w-0 flex-wrap">
-                      <Scan className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Photomask Level / Reticle</span>
+                <div className="p-2 rounded-md bg-slate-900 border border-slate-800 space-y-1.5 min-w-0">
+                  <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                    <span className="text-[10.5px] font-semibold text-sky-400 flex items-center gap-1 min-w-0 flex-wrap">
+                      <Scan className="w-3 h-3 shrink-0" />
+                      <span className="truncate">Photomask Reticle</span>
                       {step.variants && step.variants.length > 1 && step.lithography?.maskId && (() => {
                         const curVar = getActiveStepVariant(step);
                         const sharedCount = step.variants.filter(
@@ -1696,14 +1859,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     {onOpenMaskLevelsModal && (
                       <button
                         onClick={() => onOpenMaskLevelsModal(step.lithography?.maskId)}
-                        className="text-[11px] text-sky-400 hover:text-sky-300 hover:underline flex items-center gap-1 font-medium shrink-0"
+                        className="text-[10.5px] text-sky-400 hover:text-sky-300 hover:underline flex items-center gap-1 font-medium shrink-0"
                       >
-                        <span>Manage Reticles →</span>
+                        <span>Reticles →</span>
                       </button>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <select
                       value={step.lithography?.maskId || 'none'}
                       onChange={(e) => {
@@ -1743,7 +1906,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           setIsEditingMaskName(false);
                         }
                       }}
-                      className="min-w-0 flex-1 w-full truncate px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-sky-500"
+                      className="min-w-0 flex-1 w-full truncate px-2 py-1 rounded-md bg-slate-950 border border-slate-700 text-slate-200 text-[11px] font-mono focus:outline-none focus:border-sky-500"
                     >
                       <option value="none">-- Unlinked Custom Features --</option>
                       {masks?.map((m) => (
@@ -1859,13 +2022,64 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       </span>
                     </div>
                   )}
+
+                  {step.lithography && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleUpdate({
+                          lithography: {
+                            ...step.lithography!,
+                            definesAlignmentMarks: !step.lithography!.definesAlignmentMarks,
+                          },
+                        })
+                      }
+                      aria-pressed={Boolean(step.lithography.definesAlignmentMarks)}
+                      className={`w-full flex items-center justify-between gap-2 px-2.5 py-1 rounded-md border text-[11px] font-medium transition-colors ${
+                        step.lithography.definesAlignmentMarks
+                          ? 'bg-cyan-500/15 border-cyan-500/50 text-cyan-200 hover:bg-cyan-500/20'
+                          : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700 hover:text-slate-100'
+                      }`}
+                      title="Toggle whether this photolithography step defines alignment marks on the substrate"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <Crosshair className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                        <span>Defines Alignment Marks</span>
+                      </span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded-xs text-[9.5px] font-mono ${
+                          step.lithography.definesAlignmentMarks
+                            ? 'bg-cyan-500/30 text-cyan-100'
+                            : 'bg-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {step.lithography.definesAlignmentMarks ? 'ON' : 'OFF'}
+                      </span>
+                    </button>
+                  )}
+
+                  {onToggleMaskTrack && (
+                    <button
+                      type="button"
+                      onClick={onToggleMaskTrack}
+                      aria-pressed={isMaskTrackOpen}
+                      className={`w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[11px] font-medium transition-colors ${
+                        isMaskTrackOpen
+                          ? 'bg-sky-600/20 border-sky-500/60 text-sky-200 hover:bg-sky-600/30'
+                          : 'bg-sky-600 hover:bg-sky-500 border-sky-500 text-white shadow-sm'
+                      }`}
+                    >
+                      <Scan className="w-3.5 h-3.5 shrink-0" />
+                      <span>{isMaskTrackOpen ? 'Hide Aperture Track' : 'Edit Aperture Track'}</span>
+                    </button>
+                  )}
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="block text-[11px] text-slate-400">
+                <div className="space-y-1">
+                  <label className="block text-[10.5px] text-slate-400">
                     Resist Application Method
                   </label>
-                  <div className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px]">
+                  <div className="grid grid-cols-3 gap-0.5 p-0.5 rounded-md bg-slate-900 border border-slate-800 text-[10.5px]">
                     {(
                       [
                         {
@@ -1875,7 +2089,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         },
                         {
                           id: 'lor-bilayer' as const,
-                          label: 'LOR Double Coat',
+                          label: 'LOR Double',
                           title: 'Bilayer coat: LOR underlayer + top imaging resist with adjustable lift-off undercut',
                         },
                         {
@@ -1936,7 +2150,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               },
                             });
                           }}
-                          className={`py-1 px-1.5 rounded-md font-medium transition-colors truncate ${
+                          className={`py-0.5 px-1 rounded font-medium transition-colors truncate ${
                             active
                               ? opt.id === 'lor-bilayer'
                                 ? 'bg-violet-600 text-white shadow-sm'
@@ -1960,24 +2174,24 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   const lorUndercut = step.lithography?.lorUndercut ?? 350;
                   const maxUndercutSlider = Math.max(1200, Math.round(waferWidth * 0.2));
                   return (
-                    <div className="p-2.5 rounded-lg bg-violet-950/25 border border-violet-500/35 space-y-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="p-2 rounded-md bg-violet-950/25 border border-violet-500/35 space-y-1.5">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1 min-w-0">
                           <span
-                            className="w-2.5 h-2.5 rounded-sm shrink-0 border border-white/20"
+                            className="w-2 h-2 rounded-xs shrink-0 border border-white/20"
                             style={{ backgroundColor: lorMat?.color || '#8b5cf6' }}
                           />
-                          <span className="text-[11px] font-semibold text-violet-300 truncate">
-                            Bilayer Stack · 1st Coat: {lorMat?.name || 'LOR Lift-Off Resist'}
+                          <span className="text-[10.5px] font-semibold text-violet-300 truncate">
+                            Bilayer · {lorMat?.name || 'LOR Resist'}
                           </span>
                         </div>
-                        <span className="text-[10px] font-mono text-violet-300/90 shrink-0">
+                        <span className="text-[9.5px] font-mono text-violet-300/90 shrink-0 tabular-nums">
                           Total {formatThickness(lorThick + (step.lithography?.resistThickness ?? 1000), thicknessUnit)}
                         </span>
                       </div>
 
                       <div>
-                        <label className="block text-[11px] text-slate-300 mb-1">
+                        <label className="block text-[10px] text-slate-300 mb-0.5">
                           LOR Underlayer Thickness ({getUnitLabel(thicknessUnit)})
                         </label>
                         <ParametricThicknessInput
@@ -1993,7 +2207,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           unit={thicknessUnit}
                           minNm={50}
                           stepNm={50}
-                          className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-violet-500"
+                          className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-violet-500"
                           expression={step.paramBindings?.['lithography.lorThickness']}
                           variables={variables}
                           waferWidth={waferWidth}
@@ -2005,12 +2219,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         />
                       </div>
 
-                      <div className="space-y-1.5 pt-0.5">
-                        <div className="flex items-center justify-between text-[11px]">
+                      <div className="space-y-1 pt-0.5">
+                        <div className="flex items-center justify-between text-[10.5px]">
                           <span className="text-slate-300 font-medium">
                             LOR Lateral Undercut ({getUnitLabel(thicknessUnit)})
                           </span>
-                          <span className="font-mono text-violet-300">
+                          <span className="font-mono text-violet-300 tabular-nums">
                             {formatThickness(lorUndercut, thicknessUnit)}
                           </span>
                         </div>
@@ -2043,7 +2257,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           unit={thicknessUnit}
                           minNm={0}
                           stepNm={25}
-                          className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-violet-500"
+                          className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-violet-500"
                           expression={step.paramBindings?.['lithography.lorUndercut']}
                           variables={variables}
                           waferWidth={waferWidth}
@@ -2068,7 +2282,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                     },
                                   })
                                 }
-                                className={`flex-1 py-0.5 rounded text-[10px] font-mono border transition-colors ${
+                                className={`flex-1 py-0.5 rounded text-[9.5px] font-mono border transition-colors ${
                                   active
                                     ? 'bg-violet-500/20 border-violet-500/60 text-violet-200'
                                     : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -2079,9 +2293,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             );
                           })}
                         </div>
-                        <p className="text-[10px] text-slate-400 leading-snug">
+                        <p className="text-[9.5px] text-slate-400 leading-tight">
                           {lorUndercut === 0
-                            ? 'Flush LOR wall (0 nm undercut). Increase undercut to form a re-entrant overhang for clean metal lift-off.'
+                            ? 'Flush LOR wall (0 nm undercut). Increase undercut to form a re-entrant overhang for clean lift-off.'
                             : `Isotropic developer recesses LOR ${formatThickness(lorUndercut, thicknessUnit)} beneath the top imaging resist overhang.`}
                         </p>
                       </div>
@@ -2090,12 +2304,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 })()}
 
                 {(step.lithography?.coatMethod ?? 'spin-coat') !== 'dry-film' ? (
-                  <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px]">
+                  <div className="p-2 rounded-md bg-slate-900/90 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between text-[10.5px]">
                       <span className="text-slate-300 font-medium">
-                        Spin-Coat Planarization (Viscosity)
+                        Spin-Coat Planarization
                       </span>
-                      <span className="font-mono text-rose-400">
+                      <span className="font-mono text-rose-400 tabular-nums">
                         {step.lithography?.planarization ?? 100}%{' '}
                         {(step.lithography?.planarization ?? 100) >= 95
                           ? '(Ideal)'
@@ -2153,7 +2367,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 },
                               })
                             }
-                            className={`flex-1 py-0.5 rounded text-[10px] font-mono border transition-colors ${
+                            className={`flex-1 py-0.5 rounded text-[9.5px] font-mono border transition-colors ${
                               active
                                 ? 'bg-rose-500/20 border-rose-500/60 text-rose-300'
                                 : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -2164,19 +2378,19 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         );
                       })}
                     </div>
-                    <p className="text-[10px] text-slate-400 leading-snug">
+                    <p className="text-[9.5px] text-slate-400 leading-tight">
                       {(step.lithography?.planarization ?? 100) >= 95
                         ? 'Flat planarized resist surface across all underlying topography.'
                         : 'High-viscosity resist dips over wide valleys while narrow trenches fill more flatly.'}
                     </p>
                   </div>
                 ) : (
-                  <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px]">
+                  <div className="p-2 rounded-md bg-slate-900/90 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between text-[10.5px]">
                       <span className="text-slate-300 font-medium">
                         Lamination Conformality (Sag)
                       </span>
-                      <span className="font-mono text-rose-400">
+                      <span className="font-mono text-rose-400 tabular-nums">
                         {step.lithography?.laminationSag ?? 0}%
                       </span>
                     </div>
@@ -2196,7 +2410,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       }
                       className="w-full accent-rose-500"
                     />
-                    <p className="text-[10px] text-slate-400 leading-snug">
+                    <p className="text-[9.5px] text-slate-400 leading-tight">
                       {(step.lithography?.laminationSag ?? 0) === 0
                         ? 'Dry film resist tents flat across cavities before UV exposure & development.'
                         : 'Dry film bridges narrow trenches while draping into wider topography.'}
@@ -2204,9 +2418,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Mask Field Polarity
                     </label>
                     <select
@@ -2227,7 +2441,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           },
                         });
                       }}
-                      className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                     >
                       <option value="dark-field">Dark-Field (Blocks = Apertures)</option>
                       <option value="light-field">Light-Field (Blocks = Chrome Blockers)</option>
@@ -2235,10 +2449,10 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       {(step.lithography?.coatMethod ?? 'spin-coat') === 'lor-bilayer'
-                        ? 'Top Resist Tone (2nd Coat)'
-                        : 'Resist Tone (Chemistry)'}
+                        ? 'Top Resist Tone'
+                        : 'Resist Tone'}
                     </label>
                     <select
                       value={step.lithography?.polarity || 'positive'}
@@ -2262,7 +2476,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           },
                         });
                       }}
-                      className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                     >
                       <option value="positive">Positive (Exposed dissolves)</option>
                       <option value="negative">Negative (Unexposed dissolves)</option>
@@ -2270,7 +2484,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   </div>
                 </div>
 
-                <div className="px-2.5 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800 text-[10px] text-slate-400 leading-snug">
+                <div className="px-2 py-1 rounded-md bg-slate-900/80 border border-slate-800 text-[9.5px] text-slate-400 leading-tight">
                   {(step.lithography?.maskField || 'dark-field') === 'light-field' ? (
                     (step.lithography?.polarity || 'positive') === 'positive' ? (
                       <span>
@@ -2292,54 +2506,79 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   )}
                 </div>
 
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    {(step.lithography?.coatMethod ?? 'spin-coat') === 'lor-bilayer'
-                      ? `Top Imaging Resist Thickness (${getUnitLabel(thicknessUnit)})`
-                      : `Resist Thickness (${getUnitLabel(thicknessUnit)})`}
-                  </label>
-                  <ParametricThicknessInput
-                    valueNm={step.lithography?.resistThickness ?? 1000}
-                    onChangeNm={(val) =>
-                      handleUpdate({
-                        lithography: {
-                          ...(step.lithography || {
-                            resistMaterialId: 'mat_pr_pos',
-                            polarity: 'positive',
-                            windows: [],
-                            sidewallAngle: 90,
-                            exposureMethod: 'UV Contact (365nm)',
-                            resistThickness: 1000,
-                          }),
-                          resistThickness: val,
-                        },
-                      })
-                    }
-                    unit={thicknessUnit}
-                    minNm={100}
-                    stepNm={100}
-                    className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
-                    expression={step.paramBindings?.['lithography.resistThickness']}
-                    variables={variables}
-                    waferWidth={waferWidth}
-                    suggestedVarName="pr_thick"
-                    targetLabel={`${step.title} · Resist Thickness`}
-                    onChangeExpression={(expr) => setStepParamBinding('lithography.resistThickness', expr)}
-                    onCreateVariable={onCreateVariable}
-                    onOpenVariablesModal={onOpenVariablesModal}
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
+                      {(step.lithography?.coatMethod ?? 'spin-coat') === 'lor-bilayer'
+                        ? `Top Resist (${getUnitLabel(thicknessUnit)})`
+                        : `Resist Thick. (${getUnitLabel(thicknessUnit)})`}
+                    </label>
+                    <ParametricThicknessInput
+                      valueNm={step.lithography?.resistThickness ?? 1000}
+                      onChangeNm={(val) =>
+                        handleUpdate({
+                          lithography: {
+                            ...(step.lithography || {
+                              resistMaterialId: 'mat_pr_pos',
+                              polarity: 'positive',
+                              windows: [],
+                              sidewallAngle: 90,
+                              exposureMethod: 'UV Contact (365nm)',
+                              resistThickness: 1000,
+                            }),
+                            resistThickness: val,
+                          },
+                        })
+                      }
+                      unit={thicknessUnit}
+                      minNm={100}
+                      stepNm={100}
+                      className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
+                      expression={step.paramBindings?.['lithography.resistThickness']}
+                      variables={variables}
+                      waferWidth={waferWidth}
+                      suggestedVarName="pr_thick"
+                      targetLabel={`${step.title} · Resist Thickness`}
+                      onChangeExpression={(expr) => setStepParamBinding('lithography.resistThickness', expr)}
+                      onCreateVariable={onCreateVariable}
+                      onOpenVariablesModal={onOpenVariablesModal}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
+                      Exposure Tool
+                    </label>
+                    <select
+                      value={step.lithography?.exposureMethod || 'UV Contact (365nm)'}
+                      onChange={(e) =>
+                        handleUpdate({
+                          lithography: {
+                            ...step.lithography!,
+                            exposureMethod: e.target.value as any,
+                          },
+                        })
+                      }
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="UV Contact (365nm)">UV Contact Aligner (i-line 365nm)</option>
+                      <option value="DUV Stepper (248nm)">DUV Projection Stepper (248nm)</option>
+                      <option value="E-Beam Litho">Electron Beam Lithography (EBL)</option>
+                      <option value="Direct Write Laser">Direct Write Laser (MLA150)</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div>
-                  <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                  <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
                     <span>Sidewall Profile Angle</span>
-                    <span className="font-mono text-rose-400">
+                    <span className="font-mono text-rose-400 tabular-nums">
                       {step.lithography?.sidewallAngle ?? 90}°{' '}
                       {(step.lithography?.sidewallAngle ?? 90) > 90
-                        ? '(Retrograde / Lift-off Undercut)'
+                        ? '(Undercut)'
                         : (step.lithography?.sidewallAngle ?? 90) < 90
                         ? '(Tapered)'
-                        : '(Vertical 90°)'}
+                        : '(Vertical)'}
                     </span>
                   </div>
                   <input
@@ -2357,29 +2596,6 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     }
                     className="w-full accent-rose-500"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    Exposure Tool Wavelength
-                  </label>
-                  <select
-                    value={step.lithography?.exposureMethod || 'UV Contact (365nm)'}
-                    onChange={(e) =>
-                      handleUpdate({
-                        lithography: {
-                          ...step.lithography!,
-                          exposureMethod: e.target.value as any,
-                        },
-                      })
-                    }
-                    className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="UV Contact (365nm)">UV Contact Aligner (i-line 365nm)</option>
-                    <option value="DUV Stepper (248nm)">DUV Projection Stepper (248nm)</option>
-                    <option value="E-Beam Litho">Electron Beam Lithography (EBL)</option>
-                    <option value="Direct Write Laser">Direct Write Laser (MLA150)</option>
-                  </select>
                 </div>
               </div>
             )}
@@ -2421,32 +2637,32 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 refRate > 0 ? Math.max(1, (currentDepth / refRate) * 60) : 0;
 
               return (
-              <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
+              <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-amber-400">
+                  <span className="text-[11px] font-semibold text-amber-400">
                     Etch Parameters &amp; Isotropy
                   </span>
                   {onOpenEtchLibrary && (
                     <button
                       type="button"
                       onClick={onOpenEtchLibrary}
-                      className="flex items-center gap-1 text-[11px] text-amber-400 hover:text-amber-300 hover:underline shrink-0"
+                      className="flex items-center gap-1 text-[10.5px] text-amber-400 hover:text-amber-300 hover:underline shrink-0"
                     >
                       <FlaskConical className="w-3 h-3" />
-                      <span>Etch Rate Library</span>
+                      <span>Etch Library</span>
                     </button>
                   )}
                 </div>
 
                 {/* Etch Rate Library Recipe Selector */}
                 <div>
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <label className="block text-[11px] text-slate-400">
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                    <label className="block text-[10.5px] text-slate-400">
                       Etch Chemistry / Rate Recipe
                     </label>
-                    <span className="text-[10px] font-mono text-slate-500">
+                    <span className="text-[9.5px] font-mono text-slate-500 tabular-nums">
                       {matchingRecipes.length}{' '}
-                      {matchingRecipes.length === 1 ? 'recipe' : 'recipes'} for mechanism
+                      {matchingRecipes.length === 1 ? 'recipe' : 'recipes'}
                     </span>
                   </div>
                   <select
@@ -2542,7 +2758,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         },
                       });
                     }}
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-amber-500"
+                    className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-amber-500"
                   >
                     <option value="">-- Manual Depth (Custom Parameters) --</option>
                     {matchingRecipes.map((r) => {
@@ -2558,8 +2774,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                 {/* Mode Switcher & Selectivity Readout when Recipe Linked */}
                 {linkedRecipe && (
-                  <div className="p-2.5 rounded-lg bg-amber-950/25 border border-amber-500/30 space-y-2 text-[11px]">
-                    <div className="grid grid-cols-2 gap-1 p-0.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <div className="p-2 rounded-md bg-amber-950/25 border border-amber-500/30 space-y-1.5 text-[10.5px]">
+                    <div className="grid grid-cols-2 gap-0.5 p-0.5 rounded-md bg-slate-950 border border-slate-800">
                       <button
                         type="button"
                         onClick={() => {
@@ -2577,13 +2793,13 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             },
                           });
                         }}
-                        className={`py-1 px-2 rounded text-[10px] font-medium transition-colors ${
+                        className={`py-0.5 px-1.5 rounded text-[10px] font-medium transition-colors ${
                           rateMode === 'time-rate'
                             ? 'bg-amber-600 text-white shadow-sm'
                             : 'text-slate-400 hover:text-slate-200'
                         }`}
                       >
-                        Time &amp; Rate Physics
+                        Time &amp; Rate
                       </button>
                       <button
                         type="button"
@@ -2595,20 +2811,20 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             },
                           })
                         }
-                        className={`py-1 px-2 rounded text-[10px] font-medium transition-colors ${
+                        className={`py-0.5 px-1.5 rounded text-[10px] font-medium transition-colors ${
                           rateMode === 'manual'
                             ? 'bg-amber-600 text-white shadow-sm'
                             : 'text-slate-400 hover:text-slate-200'
                         }`}
                       >
-                        Fixed Target Depth
+                        Target Depth
                       </button>
                     </div>
 
                     {rateMode === 'manual' && (
                       <div>
-                        <label className="block text-[10px] text-slate-400 mb-1">
-                          Reference Material (for Equiv. Etch Time)
+                        <label className="block text-[9.5px] text-slate-400 mb-0.5">
+                          Reference Material (Equiv. Time)
                         </label>
                         <select
                           value={refMatId}
@@ -2620,7 +2836,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               },
                             })
                           }
-                          className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-amber-500"
+                          className="w-full px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-amber-500"
                         >
                           {[...materials]
                             .sort((a, b) => {
@@ -2648,7 +2864,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       </div>
                     )}
 
-                    <div className="flex flex-wrap items-center justify-between gap-1.5 text-[10px] font-mono text-slate-300">
+                    <div className="flex flex-wrap items-center justify-between gap-1 text-[9.5px] font-mono text-slate-300 tabular-nums">
                       <span>
                         {refMat?.formula || 'Ref'}:{' '}
                         <strong className="text-amber-300">
@@ -2681,23 +2897,23 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       )}
                     </div>
 
-                    <p className="text-[10px] text-slate-400 leading-snug">
+                    <p className="text-[9.5px] text-slate-400 leading-tight">
                       {rateMode === 'time-rate'
                         ? 'Multi-layer selectivity & photoresist mask erosion active; 0-rate layers act as etch stops.'
                         : refRate > 0
-                        ? `Equiv. time from ${refMat?.formula || 'reference'} (${formatDurationCompact(estTimeSec)}); all open & masked layers follow recipe etch rates.`
+                        ? `Equiv. time from ${refMat?.formula || 'reference'} (${formatDurationCompact(estTimeSec)}); layers follow recipe etch rates.`
                         : 'Selected reference material has 0 nm/min etch rate in this recipe — select an etched material.'}
                     </p>
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-2">
                   {linkedRecipe && rateMode === 'time-rate' ? (
                     <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">
+                      <label className="block text-[10.5px] text-slate-400 mb-0.5">
                         Etch Time (sec)
                       </label>
-                      <div className="space-y-1">
+                      <div className="space-y-0.5">
                         <input
                           type="number"
                           min={1}
@@ -2718,9 +2934,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               },
                             });
                           }}
-                          className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-amber-500"
+                          className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-amber-500"
                         />
-                        <div className="flex items-center justify-between text-[10px] font-mono text-amber-300/90">
+                        <div className="flex items-center justify-between text-[9.5px] font-mono text-amber-300/90 tabular-nums">
                           <span>{formatDurationCompact(etchTimeSec)}</span>
                           <span>
                             {refRate > 0
@@ -2732,7 +2948,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     </div>
                   ) : (
                     <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">
+                      <label className="block text-[10.5px] text-slate-400 mb-0.5">
                         Etch Depth ({getUnitLabel(thicknessUnit)})
                       </label>
                       <ParametricThicknessInput
@@ -2755,7 +2971,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         unit={thicknessUnit}
                         minNm={10}
                         stepNm={25}
-                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                        className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                         expression={step.paramBindings?.['etch.depth']}
                         variables={variables}
                         waferWidth={waferWidth}
@@ -2766,7 +2982,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         onOpenVariablesModal={onOpenVariablesModal}
                       />
                       {linkedRecipe && refRate > 0 && (
-                        <span className="text-[10px] font-mono text-amber-300/90 block mt-0.5">
+                        <span className="text-[9.5px] font-mono text-amber-300/90 block mt-0.5 tabular-nums">
                           Est. time: {formatDurationCompact(estTimeSec)}
                         </span>
                       )}
@@ -2774,7 +2990,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   )}
 
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Etch Mechanism
                     </label>
                     <select
@@ -2835,7 +3051,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           },
                         });
                       }}
-                      className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                     >
                       <option value="rie">Reactive Ion Etch (RIE)</option>
                       <option value="drie-bosch">Deep RIE (Bosch DRIE)</option>
@@ -2847,71 +3063,99 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    Target Material to Etch
-                  </label>
-                  <select
-                    value={step.etch?.targetMaterialId || 'all'}
-                    onChange={(e) => {
-                      const nextTarget = e.target.value;
-                      handleUpdate({
-                        etch: {
-                          ...(step.etch || {
-                            etchType: 'rie',
-                            depth: step.thickness || 300,
-                            isotropy: 0.05,
-                            sidewallAngle: 90,
-                          }),
-                          targetMaterialId: nextTarget,
-                          ...(nextTarget !== 'all'
-                            ? { referenceMaterialId: undefined }
-                            : {}),
-                        },
-                      });
-                    }}
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="all">All Exposed Layers</option>
-                    {materials.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        Selective: {m.name} ({m.formula})
-                        {currentEtchType === 'wet-koh'
-                          ? isCrystallineKohMaterial(m)
-                            ? ' — Crystal {111}'
-                            : ' — Isotropic'
-                          : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {currentEtchType === 'wet-koh' && (() => {
-                    const selectedTargetMat =
-                      targetMatId !== 'all'
-                        ? materials.find((m) => m.id === targetMatId)
-                        : undefined;
-                    if (selectedTargetMat && !isCrystallineKohMaterial(selectedTargetMat)) {
-                      return (
-                        <p className="mt-1.5 px-2 py-1.5 rounded-lg bg-sky-950/40 border border-sky-500/30 text-[10px] text-sky-200 leading-snug">
-                          <strong>{selectedTargetMat.name}</strong> is not monocrystalline and does not etch along crystal planes — it will etch <strong>isotropically</strong> (circular undercut) in KOH / TMAH.
-                        </p>
-                      );
-                    }
-                    return (
-                      <p className="mt-1.5 text-[10px] text-slate-400 leading-snug">
-                        {selectedTargetMat
-                          ? `${selectedTargetMat.name} etches anisotropically along crystal planes (${step.etch?.sidewallAngle ?? 54.74}°).`
-                          : 'Crystal-plane etching (54.74°) applies only to single-crystal materials (Si <100>, Si:P); other etched layers (e.g. poly-Si, Al, SiO₂) etch isotropically.'}
-                      </p>
-                    );
-                  })()}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
+                      Target Material
+                    </label>
+                    <select
+                      value={step.etch?.targetMaterialId || 'all'}
+                      onChange={(e) => {
+                        const nextTarget = e.target.value;
+                        handleUpdate({
+                          etch: {
+                            ...(step.etch || {
+                              etchType: 'rie',
+                              depth: step.thickness || 300,
+                              isotropy: 0.05,
+                              sidewallAngle: 90,
+                            }),
+                            targetMaterialId: nextTarget,
+                            ...(nextTarget !== 'all'
+                              ? { referenceMaterialId: undefined }
+                              : {}),
+                          },
+                        });
+                      }}
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="all">All Exposed Layers</option>
+                      {materials.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          Selective: {m.name} ({m.formula})
+                          {currentEtchType === 'wet-koh'
+                            ? isCrystallineKohMaterial(m)
+                              ? ' — Crystal {111}'
+                              : ' — Isotropic'
+                            : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
+                      Etch Stop Layer
+                    </label>
+                    <select
+                      value={step.etch?.stopLayerMaterialId || ''}
+                      onChange={(e) =>
+                        handleUpdate({
+                          etch: {
+                            ...step.etch!,
+                            stopLayerMaterialId: e.target.value || undefined,
+                          },
+                        })
+                      }
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="">None (Time Etch)</option>
+                      {materials.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          Stop: {m.name} ({m.formula})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
+                {currentEtchType === 'wet-koh' && (() => {
+                  const selectedTargetMat =
+                    targetMatId !== 'all'
+                      ? materials.find((m) => m.id === targetMatId)
+                      : undefined;
+                  if (selectedTargetMat && !isCrystallineKohMaterial(selectedTargetMat)) {
+                    return (
+                      <p className="px-2 py-1 rounded-md bg-sky-950/40 border border-sky-500/30 text-[9.5px] text-sky-200 leading-tight">
+                        <strong>{selectedTargetMat.name}</strong> is not monocrystalline and does not etch along crystal planes — it will etch <strong>isotropically</strong> in KOH / TMAH.
+                      </p>
+                    );
+                  }
+                  return (
+                    <p className="text-[9.5px] text-slate-400 leading-tight">
+                      {selectedTargetMat
+                        ? `${selectedTargetMat.name} etches anisotropically along crystal planes (${step.etch?.sidewallAngle ?? 54.74}°).`
+                        : 'Crystal-plane etching (54.74°) applies only to single-crystal materials (Si <100>, Si:P); other layers etch isotropically.'}
+                    </p>
+                  );
+                })()}
+
                 <div>
-                  <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                  <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
                     <span>
                       {step.etch?.etchType === 'wet-koh'
-                        ? 'Crystal {111} Mask Undercut'
-                        : 'Etch Isotropy (Mask Undercut)'}
+                        ? 'Crystal {111} Undercut'
+                        : 'Etch Isotropy (Undercut)'}
                     </span>
                     {(() => {
                       const isoVal =
@@ -2920,19 +3164,19 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       const isKoh = step.etch?.etchType === 'wet-koh';
                       const angleLabel = `${step.etch?.sidewallAngle ?? 54.74}°`;
                       return (
-                        <span className="font-mono text-amber-400">
+                        <span className="font-mono text-amber-400 tabular-nums">
                           {Math.round(isoVal * 100)}%{' '}
                           {isKoh
                             ? isoVal < 0.05
-                              ? `(${angleLabel} Zero Undercut)`
+                              ? `(${angleLabel} Zero)`
                               : isoVal > 0.7
-                              ? `(${angleLabel} High Lateral Undercut)`
-                              : `(${angleLabel} Lateral Undercut)`
+                              ? `(${angleLabel} High)`
+                              : `(${angleLabel} Lat.)`
                             : isoVal < 0.1
-                            ? '(Anisotropic Vertical)'
+                            ? '(Anisotropic)'
                             : isoVal > 0.7
-                            ? '(Isotropic Circular Undercut)'
-                            : '(Moderate Undercut)'}
+                            ? '(Isotropic)'
+                            : '(Moderate)'}
                         </span>
                       );
                     })()}
@@ -2959,8 +3203,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                 {/* Sidewall Taper Angle for RIE, DRIE, and Ion Beam Milling */}
                 {(['rie', 'drie-bosch', 'ion-beam'].includes(step.etch?.etchType || 'rie')) && (
-                  <div className="pt-2.5 border-t border-slate-800 space-y-2">
-                    <div className="flex justify-between text-[11px] text-slate-400">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <div className="flex justify-between text-[10.5px] text-slate-400">
                       <span>Sidewall Taper Angle</span>
                       {(() => {
                         const isIonBeam = step.etch?.etchType === 'ion-beam';
@@ -3031,7 +3275,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 },
                               })
                             }
-                            className={`flex-1 py-1 rounded text-[10px] font-mono border transition-colors ${
+                            className={`flex-1 py-0.5 rounded text-[9.5px] font-mono border transition-colors ${
                               active
                                 ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
                                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -3047,8 +3291,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                 {/* Adjustable Bosch DRIE Sidewall Scallops */}
                 {step.etch?.etchType === 'drie-bosch' && (
-                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
-                    <label className="flex items-start gap-2 cursor-pointer">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <label className="flex items-start gap-1.5 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={Boolean(step.etch?.scallopEffect)}
@@ -3065,21 +3309,21 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         className="mt-0.5 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0"
                       />
                       <div>
-                        <span className="text-[11px] font-medium text-slate-200 block">
+                        <span className="text-[10.5px] font-medium text-slate-200 block leading-tight">
                           Bosch DRIE Sidewall Scallops
                         </span>
-                        <span className="text-[10px] text-slate-400 leading-snug block">
-                          Periodic SF₆/C₄F₈ etch-passivation undulations along etched trench walls.
+                        <span className="text-[9.5px] text-slate-400 leading-tight block">
+                          Periodic SF₆/C₄F₈ etch-passivation undulations along trench walls.
                         </span>
                       </div>
                     </label>
 
                     {step.etch?.scallopEffect && (
-                      <div className="space-y-2.5 pl-1">
+                      <div className="space-y-1.5 pl-1">
                         <div>
-                          <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                            <span>Scallop Depth (Amplitude)</span>
-                            <span className="font-mono text-amber-400">
+                          <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
+                            <span>Scallop Depth</span>
+                            <span className="font-mono text-amber-400 tabular-nums">
                               {formatThickness(step.etch?.scallopDepth ?? 45, thicknessUnit)}
                             </span>
                           </div>
@@ -3102,8 +3346,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         </div>
 
                         <div>
-                          <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                            <span>Scallop Pitch (Cycle Height)</span>
+                          <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
+                            <span>Scallop Pitch</span>
                             {(() => {
                               const effCycleDepth =
                                 linkedRecipe && rateMode === 'time-rate' && refRate > 0
@@ -3111,10 +3355,10 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                   : step.etch?.depth ?? step.thickness ?? 300;
                               const pitchNm = Math.max(20, step.etch?.scallopPitch ?? 200);
                               return (
-                                <span className="font-mono text-amber-400">
+                                <span className="font-mono text-amber-400 tabular-nums">
                                   {formatThickness(step.etch?.scallopPitch ?? 200, thicknessUnit)} (~
                                   {Math.max(1, Math.round(effCycleDepth / pitchNm))}{' '}
-                                  cycles)
+                                  cyc)
                                 </span>
                               );
                             })()}
@@ -3137,8 +3381,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           />
                         </div>
                         {step.etch?.ardeEnabled && (
-                          <p className="text-[10px] text-slate-400 leading-snug">
-                            Knudsen ARDE transport preserves total cycle count across narrow &amp; wide trenches while compressing local pitch and attenuating bottom scallops.
+                          <p className="text-[9.5px] text-slate-400 leading-tight">
+                            Knudsen ARDE transport preserves total cycle count across narrow &amp; wide trenches while compressing local pitch.
                           </p>
                         )}
                       </div>
@@ -3146,37 +3390,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   </div>
                 )}
 
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    Etch Stop Layer (Auto Endpoint)
-                  </label>
-                  <select
-                    value={step.etch?.stopLayerMaterialId || ''}
-                    onChange={(e) =>
-                      handleUpdate({
-                        etch: {
-                          ...step.etch!,
-                          stopLayerMaterialId: e.target.value || undefined,
-                        },
-                      })
-                    }
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="">None (Time Etch)</option>
-                    {materials.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        Stop at: {m.name} ({m.formula})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
                 {/* Aspect Ratio Dependent Etching (ARDE / RIE Lag) for Dry Etching */}
                 {(['rie', 'drie-bosch', 'ion-beam', 'ashing'].includes(
                   step.etch?.etchType || 'rie'
                 )) && (
-                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
-                    <label className="flex items-start gap-2 cursor-pointer">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <label className="flex items-start gap-1.5 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={Boolean(step.etch?.ardeEnabled)}
@@ -3198,20 +3417,20 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         className="mt-0.5 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0"
                       />
                       <div>
-                        <span className="text-[11px] font-medium text-slate-200 block">
+                        <span className="text-[10.5px] font-medium text-slate-200 block leading-tight">
                           Apply ARDE / RIE Lag Effect
                         </span>
-                        <span className="text-[10px] text-slate-400 leading-snug block">
-                          Narrow openings etch shallower than wide openings based on local feature aspect ratio.
+                        <span className="text-[9.5px] text-slate-400 leading-tight block">
+                          Narrow openings etch shallower than wide openings based on aspect ratio.
                         </span>
                       </div>
                     </label>
 
                     {step.etch?.ardeEnabled && (
                       <div>
-                        <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                        <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
                           <span>RIE Lag Strength (k)</span>
-                          <span className="font-mono text-amber-400">
+                          <span className="font-mono text-amber-400 tabular-nums">
                             {Math.round((step.etch?.ardeStrength ?? 0.5) * 100)}%{' '}
                             {(step.etch?.ardeStrength ?? 0.5) < 0.35
                               ? '(Mild)'
@@ -3245,8 +3464,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 {(step.etch?.etchType === 'wet-isotropic' ||
                   step.etch?.etchType === 'wet-koh' ||
                   (step.etch?.isotropy ?? 0.05) >= 0.15) && (
-                  <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
-                    <label className="flex items-start gap-2 cursor-pointer">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <label className="flex items-start gap-1.5 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={Boolean(step.etch?.convexCornerEffect)}
@@ -3269,20 +3488,20 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         className="mt-0.5 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0"
                       />
                       <div>
-                        <span className="text-[11px] font-medium text-slate-200 block">
+                        <span className="text-[10.5px] font-medium text-slate-200 block leading-tight">
                           Faster Etch at Convex Corners
                         </span>
-                        <span className="text-[10px] text-slate-400 leading-snug block">
-                          Convex corners exposed to wider etchant solid angle etch faster, rounding sharp step edges.
+                        <span className="text-[9.5px] text-slate-400 leading-tight block">
+                          Convex corners exposed to wider etchant solid angle etch faster, rounding step edges.
                         </span>
                       </div>
                     </label>
 
                     {step.etch?.convexCornerEffect && (
                       <div>
-                        <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                        <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
                           <span>Corner Rate Boost</span>
-                          <span className="font-mono text-amber-400">
+                          <span className="font-mono text-amber-400 tabular-nums">
                             +{Math.round((step.etch?.convexCornerStrength ?? 0.6) * 100)}%{' '}
                             {(step.etch?.convexCornerStrength ?? 0.6) < 0.4
                               ? '(Mild)'
@@ -3317,13 +3536,13 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
             {/* Customization for STRIP / LIFTOFF */}
             {(step.type === 'strip' || step.type === 'liftoff') && (
-              <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
-                <span className="text-xs font-semibold text-emerald-400">
-                  Strip & Release Mechanism
+              <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
+                <span className="text-[11px] font-semibold text-emerald-400">
+                  Strip &amp; Release Mechanism
                 </span>
 
                 <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
+                  <label className="block text-[10.5px] text-slate-400 mb-0.5">
                     Action Type
                   </label>
                   <select
@@ -3336,7 +3555,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         },
                       })
                     }
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                    className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                   >
                     <option value="resist-strip">Standard Resist Strip (Dissolves PR only)</option>
                     <option value="metal-liftoff">Metal Lift-off (Dissolves PR + lifts top films)</option>
@@ -3378,9 +3597,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   };
 
                   return (
-                    <div className="space-y-3">
+                    <div className="space-y-2">
                       <div>
-                        <label className="block text-[11px] text-slate-400 mb-1">
+                        <label className="block text-[10.5px] text-slate-400 mb-0.5">
                           Sacrificial Material to Dissolve
                         </label>
                         <select
@@ -3390,7 +3609,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               targetMaterialId: e.target.value,
                             })
                           }
-                          className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                          className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                         >
                           {materials.map((m) => (
                             <option key={m.id} value={m.id}>
@@ -3401,12 +3620,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       </div>
 
                       {/* Side summary & Release Scope Selector */}
-                      <div className="space-y-2 pt-1 border-t border-slate-800/80">
+                      <div className="space-y-1.5 pt-1 border-t border-slate-800/80">
                         <div className="flex items-center justify-between gap-2">
-                          <label className="text-[11px] text-slate-400 font-medium">
+                          <label className="text-[10.5px] text-slate-400 font-medium">
                             Release Region Scope
                           </label>
-                          <span className="text-[10px] font-mono text-slate-400">
+                          <span className="text-[9.5px] font-mono text-slate-400">
                             {activeSide === 'front'
                               ? 'Front (+Z) only'
                               : activeSide === 'back'
@@ -3415,7 +3634,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px]">
+                        <div className="grid grid-cols-2 gap-0.5 p-0.5 rounded-md bg-slate-900 border border-slate-800 text-[10.5px]">
                           <button
                             type="button"
                             onClick={() => {
@@ -3424,7 +3643,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 onTogglePickReleaseMode();
                               }
                             }}
-                            className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                            className={`py-1 px-1.5 rounded font-medium transition-colors ${
                               releaseScope === 'all'
                                 ? 'bg-emerald-600 text-white shadow-sm'
                                 : 'text-slate-400 hover:text-slate-200'
@@ -3435,7 +3654,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           <button
                             type="button"
                             onClick={() => updateStripPatch({ releaseScope: 'regions' })}
-                            className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                            className={`py-1 px-1.5 rounded font-medium transition-colors ${
                               releaseScope === 'regions'
                                 ? 'bg-emerald-600 text-white shadow-sm'
                                 : 'text-slate-400 hover:text-slate-200'
@@ -3446,26 +3665,26 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         </div>
 
                         {releaseScope === 'regions' && (
-                          <div className="space-y-2.5 p-2.5 rounded-lg bg-slate-900/75 border border-emerald-500/25">
-                            <p className="text-[10px] text-slate-400 leading-snug">
-                              Selected regions are <span className="text-emerald-300 font-medium">protected (not etched)</span>; all other matching material on this side is dissolved.
+                          <div className="space-y-1.5 p-2 rounded-md bg-slate-900/75 border border-emerald-500/25">
+                            <p className="text-[9.5px] text-slate-400 leading-tight">
+                              Selected regions are <span className="text-emerald-300 font-medium">protected</span>; all other matching material on this side is dissolved.
                             </p>
 
                             {/* Toolbar */}
-                            <div className="flex flex-wrap items-center justify-between gap-1.5">
+                            <div className="flex flex-wrap items-center justify-between gap-1">
                               {onTogglePickReleaseMode && (
                                 <button
                                   type="button"
                                   onClick={onTogglePickReleaseMode}
-                                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors ${
+                                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10.5px] font-medium border transition-colors ${
                                     pickReleaseMode
                                       ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
                                       : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/40'
                                   }`}
                                   title="Click sacrificial pockets or drag an X range on the cross-section canvas to keep them unetched"
                                 >
-                                  <Crosshair className="w-3.5 h-3.5 shrink-0" />
-                                  <span>{pickReleaseMode ? 'Picking Kept Regions' : 'Pick on Canvas'}</span>
+                                  <Crosshair className="w-3 h-3 shrink-0" />
+                                  <span>{pickReleaseMode ? 'Picking Kept' : 'Pick Canvas'}</span>
                                 </button>
                               )}
 
@@ -3473,7 +3692,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 <button
                                   type="button"
                                   onClick={handleAddManualRegion}
-                                  className="flex items-center gap-1 px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-medium transition-colors"
+                                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[10.5px] font-medium transition-colors"
                                 >
                                   <Plus className="w-3 h-3" />
                                   <span>Add</span>
@@ -3482,7 +3701,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => updateStripPatch({ releaseRegions: [] })}
-                                    className="px-2 py-1 rounded-md bg-slate-800 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 text-[11px] transition-colors"
+                                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 text-[10.5px] transition-colors"
                                     title="Clear all kept regions"
                                   >
                                     Clear
@@ -3492,8 +3711,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             </div>
 
                             {/* Mini Wafer X-Track Preview */}
-                            <div className="space-y-1">
-                              <div className="relative h-5 w-full rounded bg-slate-950 border border-slate-800 overflow-hidden">
+                            <div className="space-y-0.5">
+                              <div className="relative h-4 w-full rounded bg-slate-950 border border-slate-800 overflow-hidden">
                                 {regions.map((reg, rIdx) => {
                                   const lo = Math.max(0, Math.min(reg.xStart, reg.xEnd));
                                   const hi = Math.min(waferWidth, Math.max(reg.xStart, reg.xEnd));
@@ -3506,14 +3725,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                       className="absolute top-0.5 bottom-0.5 rounded-xs bg-emerald-500/35 border border-emerald-400/80 flex items-center justify-center overflow-hidden"
                                       title={`Keep K${rIdx + 1} (not etched): ${(lo / 1000).toFixed(2)} – ${(hi / 1000).toFixed(2)} µm`}
                                     >
-                                      <span className="text-[9px] font-mono font-bold text-emerald-200">
+                                      <span className="text-[8.5px] font-mono font-bold text-emerald-200">
                                         K{rIdx + 1}
                                       </span>
                                     </div>
                                   );
                                 })}
                               </div>
-                              <div className="flex justify-between text-[9px] font-mono text-slate-500">
+                              <div className="flex justify-between text-[8.5px] font-mono text-slate-500 tabular-nums">
                                 <span>0 µm</span>
                                 <span>{(waferWidth / 1000).toFixed(1)} µm</span>
                               </div>
@@ -3521,12 +3740,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                             {/* Region List */}
                             {regions.length === 0 ? (
-                              <p className="text-[11px] text-slate-400 leading-relaxed">
+                              <p className="text-[10px] text-slate-400 leading-tight">
                                 No protected regions yet — all matching sacrificial material on this side will be etched. Click{' '}
-                                <span className="text-emerald-300 font-medium">Pick on Canvas</span> to select pockets or drag an X range to keep intact.
+                                <span className="text-emerald-300 font-medium">Pick Canvas</span> to select pockets or drag an X range to keep intact.
                               </p>
                             ) : (
-                              <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
+                              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
                                 {regions.map((reg, rIdx) => {
                                   const lo = Math.min(reg.xStart, reg.xEnd);
                                   const hi = Math.max(reg.xStart, reg.xEnd);
@@ -3534,18 +3753,18 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                   return (
                                     <div
                                       key={reg.id}
-                                      className="p-2 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1.5"
+                                      className="p-1.5 rounded-md bg-slate-950/90 border border-slate-800 space-y-1"
                                     >
-                                      <div className="flex items-center justify-between gap-2">
-                                        <div className="flex items-center gap-1.5 min-w-0">
-                                          <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono text-[10px] font-semibold">
+                                      <div className="flex items-center justify-between gap-1.5">
+                                        <div className="flex items-center gap-1 min-w-0">
+                                          <span className="px-1 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono text-[9.5px] font-semibold">
                                             K{rIdx + 1}
                                           </span>
-                                          <span className="text-[10px] font-mono text-slate-400 truncate">
+                                          <span className="text-[9.5px] font-mono text-slate-400 truncate tabular-nums">
                                             Keep ΔX = {formatThickness(hi - lo, thicknessUnit)}
                                           </span>
                                         </div>
-                                        <div className="flex items-center gap-1 shrink-0">
+                                        <div className="flex items-center gap-0.5 shrink-0">
                                           {hasZBand && (
                                             <button
                                               type="button"
@@ -3558,7 +3777,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                                   ),
                                                 })
                                               }
-                                              className="px-1.5 py-0.5 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-[9px] font-mono"
+                                              className="px-1 py-0.5 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-[8.5px] font-mono"
                                               title={`Protected Z-band: ${(reg.yMin! / 1000).toFixed(2)}–${(reg.yMax! / 1000).toFixed(2)} µm. Click to protect Full Z at this X range.`}
                                             >
                                               Z-Band · Full Z
@@ -3571,7 +3790,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                                 releaseRegions: regions.filter((r) => r.id !== reg.id),
                                               })
                                             }
-                                            className="p-1 text-slate-400 hover:text-rose-400 rounded hover:bg-slate-800 transition-colors"
+                                            className="p-0.5 text-slate-400 hover:text-rose-400 rounded hover:bg-slate-800 transition-colors"
                                             title="Remove release region"
                                           >
                                             <Trash2 className="w-3 h-3" />
@@ -3579,7 +3798,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                         </div>
                                       </div>
 
-                                      <div className="grid grid-cols-2 gap-2">
+                                      <div className="grid grid-cols-2 gap-1.5">
                                         <div>
                                           <label className="block text-[9px] text-slate-400 mb-0.5">
                                             Start (µm)
@@ -3636,7 +3855,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 })()}
 
                 <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
+                  <label className="block text-[10.5px] text-slate-400 mb-0.5">
                     Solvent / Chemical Bath
                   </label>
                   <input
@@ -3651,7 +3870,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       })
                     }
                     placeholder="e.g. Acetone, O2 Plasma, HF Vapor..."
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-sky-500"
+                    className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 text-[11px] focus:outline-none focus:border-sky-500"
                   />
                 </div>
               </div>
@@ -3659,58 +3878,60 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
             {/* Customization for Grind / Polish / Planarize (CMP & Grinding) */}
             {step.type === 'cmp' && (
-              <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
-                <span className="text-xs font-semibold text-cyan-400">
-                  Grind / Polish / Planarize Parameters
+              <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
+                <span className="text-[11px] font-semibold text-cyan-400">
+                  Grind / Polish / Planarize
                 </span>
 
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    Operation Type
-                  </label>
-                  <select
-                    value={step.cmp?.operation || 'cmp'}
-                    onChange={(e) =>
-                      handleUpdate({
-                        cmp: {
-                          ...(step.cmp || { mode: 'polish-depth', depth: 300 }),
-                          operation: e.target.value as any,
-                        },
-                      })
-                    }
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="cmp">CMP Planarization (Chemical Mechanical Polish)</option>
-                    <option value="grind">Mechanical Wafer Grinding / Thinning</option>
-                    <option value="polish">Fine Lapping / Surface Polishing</option>
-                  </select>
-                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
+                      Operation Type
+                    </label>
+                    <select
+                      value={step.cmp?.operation || 'cmp'}
+                      onChange={(e) =>
+                        handleUpdate({
+                          cmp: {
+                            ...(step.cmp || { mode: 'polish-depth', depth: 300 }),
+                            operation: e.target.value as any,
+                          },
+                        })
+                      }
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="cmp">CMP Planarization</option>
+                      <option value="grind">Wafer Grinding / Thinning</option>
+                      <option value="polish">Fine Lapping / Polishing</option>
+                    </select>
+                  </div>
 
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    Removal / Planarization Mode
-                  </label>
-                  <select
-                    value={step.cmp?.mode || 'polish-depth'}
-                    onChange={(e) =>
-                      handleUpdate({
-                        cmp: {
-                          ...(step.cmp || { depth: 300 }),
-                          mode: e.target.value as any,
-                        },
-                      })
-                    }
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="polish-depth">Fixed Removal Depth ({getUnitLabel(thicknessUnit)})</option>
-                    <option value="stop-on-layer">Endpoint Stop on Barrier Layer</option>
-                    <option value="target-height">Planarize to Absolute Z Plane ({getUnitLabel(thicknessUnit)})</option>
-                  </select>
+                  <div>
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
+                      Removal Mode
+                    </label>
+                    <select
+                      value={step.cmp?.mode || 'polish-depth'}
+                      onChange={(e) =>
+                        handleUpdate({
+                          cmp: {
+                            ...(step.cmp || { depth: 300 }),
+                            mode: e.target.value as any,
+                          },
+                        })
+                      }
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="polish-depth">Fixed Removal ({getUnitLabel(thicknessUnit)})</option>
+                      <option value="stop-on-layer">Stop on Barrier Layer</option>
+                      <option value="target-height">Target Z Plane ({getUnitLabel(thicknessUnit)})</option>
+                    </select>
+                  </div>
                 </div>
 
                 {(step.cmp?.mode || 'polish-depth') === 'polish-depth' && (
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Removed Thickness / Grind Depth ({getUnitLabel(thicknessUnit)})
                     </label>
                     <ParametricThicknessInput
@@ -3726,7 +3947,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       unit={thicknessUnit}
                       minNm={10}
                       stepNm={25}
-                      className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                       expression={step.paramBindings?.['cmp.depth']}
                       variables={variables}
                       waferWidth={waferWidth}
@@ -3741,7 +3962,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                 {step.cmp?.mode === 'target-height' && (
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Target Z Plane Coordinate ({getUnitLabel(thicknessUnit)})
                     </label>
                     <ParametricThicknessInput
@@ -3757,7 +3978,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       unit={thicknessUnit}
                       minNm={-10000}
                       stepNm={50}
-                      className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                       expression={step.paramBindings?.['cmp.targetHeight']}
                       variables={variables}
                       waferWidth={waferWidth}
@@ -3772,7 +3993,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                 {step.cmp?.mode === 'stop-on-layer' && (
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Stop Layer (e.g. Si3N4)
                     </label>
                     <select
@@ -3785,7 +4006,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           },
                         })
                       }
-                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                     >
                       {materials.map((m) => (
                         <option key={m.id} value={m.id}>
@@ -3801,10 +4022,10 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   const erosionPct = step.cmp?.erosion ?? 0;
                   const hasNonIdeality = dishingPct > 0 || erosionPct > 0;
                   return (
-                    <div className="pt-2.5 border-t border-slate-800 space-y-3">
+                    <div className="pt-2 border-t border-slate-800 space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-semibold text-cyan-300">
-                          CMP Non-Idealities (Dishing &amp; Erosion)
+                        <span className="text-[10.5px] font-semibold text-cyan-300">
+                          CMP Non-Idealities
                         </span>
                         {hasNonIdeality && (
                           <button
@@ -3818,7 +4039,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 },
                               })
                             }
-                            className="text-[10px] font-mono text-slate-400 hover:text-cyan-300 transition-colors"
+                            className="text-[9.5px] font-mono text-slate-400 hover:text-cyan-300 transition-colors"
                           >
                             Reset 0%
                           </button>
@@ -3826,9 +4047,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       </div>
 
                       <div>
-                        <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                        <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
                           <span>Dishing Effect</span>
-                          <span className="font-mono text-cyan-400">
+                          <span className="font-mono text-cyan-400 tabular-nums">
                             {dishingPct === 0 ? '0% (Ideal)' : `${dishingPct}%`}
                           </span>
                         </div>
@@ -3848,15 +4069,15 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           }
                           className="w-full accent-cyan-500"
                         />
-                        <p className="text-[10px] text-slate-500 leading-snug mt-0.5">
-                          Concave recess inside wider softer/inlaid features (e.g. Cu or oxide trench fills).
+                        <p className="text-[9.5px] text-slate-500 leading-tight mt-0.5">
+                          Concave recess inside wider softer/inlaid features (e.g. Cu or oxide trenches).
                         </p>
                       </div>
 
                       <div>
-                        <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                        <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
                           <span>Erosion Effect</span>
-                          <span className="font-mono text-cyan-400">
+                          <span className="font-mono text-cyan-400 tabular-nums">
                             {erosionPct === 0 ? '0% (Ideal)' : `${erosionPct}%`}
                           </span>
                         </div>
@@ -3876,7 +4097,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           }
                           className="w-full accent-cyan-500"
                         />
-                        <p className="text-[10px] text-slate-500 leading-snug mt-0.5">
+                        <p className="text-[9.5px] text-slate-500 leading-tight mt-0.5">
                           Pattern-density thinning of surrounding dielectric/stop areas across dense arrays.
                         </p>
                       </div>
@@ -3970,9 +4191,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
               };
 
               return (
-                <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
+                <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-indigo-400 flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1.5">
                       <Link2 className="w-3.5 h-3.5" />
                       <span>Wafer Bonding Parameters</span>
                     </span>
@@ -3980,7 +4201,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                   {/* Bonding Method */}
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Bonding Mechanism
                     </label>
                     <select
@@ -3988,7 +4209,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       onChange={(e) =>
                         updateBonding({ bondingMethod: e.target.value as any })
                       }
-                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                     >
                       <option value="fusion">Direct / Fusion Bond (Si–Si / SiO₂–SiO₂)</option>
                       <option value="anodic">Anodic Bond (Si–Glass / Quartz)</option>
@@ -4000,14 +4221,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                   {/* Second Wafer Source Selector */}
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Bonded Substrate Source
                     </label>
-                    <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px]">
+                    <div className="grid grid-cols-2 gap-0.5 p-0.5 rounded-md bg-slate-900 border border-slate-800 text-[10.5px]">
                       <button
                         type="button"
                         onClick={() => updateBonding({ sourceType: 'custom-substrate' })}
-                        className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                        className={`py-1 px-1.5 rounded font-medium transition-colors ${
                           bondCfg.sourceType === 'custom-substrate'
                             ? 'bg-indigo-600 text-white shadow-sm'
                             : 'text-slate-400 hover:text-slate-200'
@@ -4018,7 +4239,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       <button
                         type="button"
                         onClick={() => updateBonding({ sourceType: 'imported-flow' })}
-                        className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                        className={`py-1 px-1.5 rounded font-medium transition-colors ${
                           bondCfg.sourceType === 'imported-flow'
                             ? 'bg-indigo-600 text-white shadow-sm'
                             : 'text-slate-400 hover:text-slate-200'
@@ -4031,7 +4252,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                   {/* Incoming Wafer Orientation */}
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Incoming Wafer Mating Face
                     </label>
                     <select
@@ -4039,7 +4260,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       onChange={(e) =>
                         updateBonding({ incomingFace: e.target.value as 'front' | 'back' })
                       }
-                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                     >
                       <option value="front">Frontside Face (Face-to-Face / Flip-Chip)</option>
                       <option value="back">Backside Face (Face-to-Back Stacking)</option>
@@ -4048,10 +4269,10 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                   {/* Source 1: Newly User-Defined Substrate Stack */}
                   {bondCfg.sourceType === 'custom-substrate' && (
-                    <div className="space-y-2.5 pt-2 border-t border-slate-800">
+                    <div className="space-y-1.5 pt-2 border-t border-slate-800">
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-semibold text-slate-300">
-                          Bonded Substrate Stack ({customLayers.length}{' '}
+                        <span className="text-[10.5px] font-semibold text-slate-300">
+                          Bonded Stack ({customLayers.length}{' '}
                           {customLayers.length === 1 ? 'Layer' : 'Layers'})
                         </span>
                         <button
@@ -4069,7 +4290,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               ],
                             })
                           }
-                          className="flex items-center gap-1 px-2 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-medium"
+                          className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-[10.5px] font-medium"
                         >
                           <Plus className="w-3 h-3" />
                           <span>Add Layer</span>
@@ -4110,7 +4331,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                 })),
                               })
                             }
-                            className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[10px] text-slate-300 hover:text-white transition-colors"
+                            className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[9.5px] text-slate-300 hover:text-white transition-colors"
                           >
                             {preset.label}
                           </button>
@@ -4118,15 +4339,15 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       </div>
 
                       {/* Layer cards (rendered top surface first) */}
-                      <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
                         {[...customLayers].reverse().map((layer, revIdx) => {
                           const actualIdx = customLayers.length - 1 - revIdx;
                           return (
                             <div
                               key={layer.id}
-                              className="p-2 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5"
+                              className="p-1.5 rounded-md bg-slate-900 border border-slate-800 space-y-1"
                             >
-                              <div className="flex items-center justify-between gap-1.5">
+                              <div className="flex items-center justify-between gap-1">
                                 <input
                                   type="text"
                                   value={layer.name || ''}
@@ -4148,14 +4369,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                       customLayers: customLayers.filter((_, i) => i !== actualIdx),
                                     });
                                   }}
-                                  className="p-1 rounded text-slate-400 hover:text-rose-400 disabled:opacity-20"
+                                  className="p-0.5 rounded text-slate-400 hover:text-rose-400 disabled:opacity-20"
                                   title="Remove Layer"
                                 >
                                   <Trash2 className="w-3 h-3" />
                                 </button>
                               </div>
 
-                              <div className="grid grid-cols-2 gap-2">
+                              <div className="grid grid-cols-2 gap-1.5">
                                 <select
                                   value={layer.materialId}
                                   onChange={(e) => {
@@ -4164,7 +4385,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                     );
                                     updateBonding({ customLayers: next });
                                   }}
-                                  className="px-2 py-1 rounded bg-slate-950 border border-slate-700 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500"
+                                  className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-700 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500"
                                 >
                                   {materials.map((m) => (
                                     <option key={m.id} value={m.id}>
@@ -4184,9 +4405,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                     unit={thicknessUnit}
                                     minNm={5}
                                     stepNm={50}
-                                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-[11px] font-mono text-white focus:outline-none focus:border-sky-500"
+                                    className="w-full px-1.5 py-0.5 rounded bg-slate-950 border border-slate-700 text-[11px] font-mono tabular-nums text-white focus:outline-none focus:border-sky-500"
                                   />
-                                  <span className="text-[10px] text-slate-500">
+                                  <span className="text-[9.5px] text-slate-500">
                                     {getUnitLabel(thicknessUnit)}
                                   </span>
                                 </div>
@@ -4200,9 +4421,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                   {/* Source 2: Pre-Processed Substrate from Imported Process JSON */}
                   {bondCfg.sourceType === 'imported-flow' && (
-                    <div className="space-y-2.5 pt-2 border-t border-slate-800">
-                      <label className="flex items-center justify-center gap-2 w-full py-2.5 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-indigo-500/60 hover:border-indigo-400 text-xs font-medium text-indigo-300 cursor-pointer transition-colors">
-                        <Upload className="w-4 h-4 shrink-0" />
+                    <div className="space-y-1.5 pt-2 border-t border-slate-800">
+                      <label className="flex items-center justify-center gap-1.5 w-full py-1.5 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 border border-dashed border-indigo-500/60 hover:border-indigo-400 text-[11px] font-medium text-indigo-300 cursor-pointer transition-colors">
+                        <Upload className="w-3.5 h-3.5 shrink-0" />
                         <span>
                           {bondCfg.importedFlow
                             ? 'Replace Imported Process File (.json)'
@@ -4217,7 +4438,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       </label>
 
                       {bondingImportError && (
-                        <div className="p-2 rounded-lg bg-rose-950/50 border border-rose-500/40 text-[11px] text-rose-300">
+                        <div className="p-1.5 rounded-md bg-rose-950/50 border border-rose-500/40 text-[10.5px] text-rose-300">
                           {bondingImportError}
                         </div>
                       )}
@@ -4233,13 +4454,13 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                           return (
                             <div
-                              className={`p-2.5 rounded-lg bg-slate-900 border space-y-2 text-xs ${
+                              className={`p-2 rounded-md bg-slate-900 border space-y-1.5 text-[11px] ${
                                 hasWidthMismatch ? 'border-amber-500/40' : 'border-emerald-500/40'
                               }`}
                             >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="font-semibold text-emerald-300 flex items-center gap-1.5 truncate">
-                                  <FileCheck className="w-3.5 h-3.5 shrink-0" />
+                              <div className="flex items-center justify-between gap-1.5">
+                                <span className="font-semibold text-emerald-300 flex items-center gap-1 truncate">
+                                  <FileCheck className="w-3 h-3 shrink-0" />
                                   <span className="truncate">
                                     {bondCfg.importedFlowTitle || bondCfg.importedFlow.title}
                                   </span>
@@ -4256,13 +4477,13 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                       widthPaddingMode: undefined,
                                     })
                                   }
-                                  className="text-[10px] text-slate-400 hover:text-rose-400 shrink-0"
+                                  className="text-[9.5px] text-slate-400 hover:text-rose-400 shrink-0"
                                 >
                                   Clear
                                 </button>
                               </div>
 
-                              <div className="text-[10px] font-mono text-slate-400 flex items-center justify-between gap-2">
+                              <div className="text-[9.5px] font-mono text-slate-400 flex items-center justify-between gap-2 tabular-nums">
                                 <span>
                                   {bondCfg.importedFlow.steps.filter((s) => s.enabled).length} enabled steps simulated
                                 </span>
@@ -4273,22 +4494,22 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               </div>
 
                               {hasWidthMismatch && (
-                                <div className="pt-2 border-t border-slate-800 space-y-2">
+                                <div className="pt-1.5 border-t border-slate-800 space-y-1.5">
                                   <div className="flex items-center justify-between gap-1.5">
-                                    <span className="text-[10px] font-medium text-amber-300 flex items-center gap-1">
+                                    <span className="text-[9.5px] font-medium text-amber-300 flex items-center gap-1">
                                       <AlertTriangle className="w-3 h-3 shrink-0" />
                                       <span>Width Mismatch Handling</span>
                                     </span>
-                                    <span className="text-[10px] font-mono text-slate-400">
+                                    <span className="text-[9.5px] font-mono text-slate-400">
                                       {effectiveImportedWidth > waferWidth ? 'Imported wider' : 'Imported narrower'}
                                     </span>
                                   </div>
 
-                                  <div className="grid grid-cols-2 gap-1 p-0.5 rounded-md bg-slate-950 border border-slate-800 text-[10px]">
+                                  <div className="grid grid-cols-2 gap-0.5 p-0.5 rounded bg-slate-950 border border-slate-800 text-[9.5px]">
                                     <button
                                       type="button"
                                       onClick={() => updateBonding({ widthMismatchMode: 'rescale' })}
-                                      className={`py-1 px-1.5 rounded font-medium flex items-center justify-center gap-1 transition-colors ${
+                                      className={`py-0.5 px-1.5 rounded font-medium flex items-center justify-center gap-1 transition-colors ${
                                         mismatchMode === 'rescale'
                                           ? 'bg-indigo-600 text-white'
                                           : 'text-slate-400 hover:text-slate-200'
@@ -4305,7 +4526,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                           widthAlignment: bondCfg.widthAlignment || 'center',
                                         })
                                       }
-                                      className={`py-1 px-1.5 rounded font-medium flex items-center justify-center gap-1 transition-colors ${
+                                      className={`py-0.5 px-1.5 rounded font-medium flex items-center justify-center gap-1 transition-colors ${
                                         mismatchMode === 'crop-pad'
                                           ? 'bg-indigo-600 text-white'
                                           : 'text-slate-400 hover:text-slate-200'
@@ -4342,12 +4563,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           );
                         })()
                       ) : (
-                        <p className="text-[11px] text-slate-500 italic leading-relaxed">
-                          Upload an exported MicroFlow <span className="font-mono">.json</span> process file. All its enabled fabrication steps will be simulated and bonded onto the selected side.
+                        <p className="text-[10px] text-slate-500 italic leading-tight">
+                          Upload an exported MicroFlow <span className="font-mono">.json</span> process file. All enabled steps will be simulated and bonded onto the selected side.
                         </p>
                       )}
 
-                      <label className="flex items-start gap-2 pt-1 cursor-pointer">
+                      <label className="flex items-start gap-2 pt-0.5 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={Boolean(bondCfg.mirrorHorizontal)}
@@ -4357,12 +4578,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           className="mt-0.5 rounded bg-slate-800 border-slate-700 text-indigo-500 focus:ring-0"
                         />
                         <div>
-                          <span className="text-[11px] font-medium text-slate-200 flex items-center gap-1.5">
-                            <FlipHorizontal2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                            <span>Mirror Pre-Processed Substrate (Left ↔ Right)</span>
+                          <span className="text-[10.5px] font-medium text-slate-200 flex items-center gap-1">
+                            <FlipHorizontal2 className="w-3 h-3 text-indigo-400 shrink-0" />
+                            <span>Mirror Pre-Processed Substrate (L ↔ R)</span>
                           </span>
-                          <span className="text-[10px] text-slate-400 leading-snug block">
-                            Mirrors the imported wafer horizontally across X (useful for flipping asymmetric structures during bonding).
+                          <span className="text-[9.5px] text-slate-400 leading-tight block">
+                            Mirrors the imported wafer horizontally across X for asymmetric structures.
                           </span>
                         </div>
                       </label>
@@ -4370,8 +4591,8 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   )}
 
                   {/* Optional Bonding Interface Seam Layer */}
-                  <div className="pt-2 border-t border-slate-800 space-y-2">
-                    <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <label className="flex items-center gap-1.5 text-[10.5px] text-slate-300 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={Boolean(bondCfg.interfaceLayer?.enabled)}
@@ -4390,7 +4611,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     </label>
 
                     {bondCfg.interfaceLayer?.enabled && (
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-2 gap-1.5">
                         <select
                           value={bondCfg.interfaceLayer.materialId}
                           onChange={(e) =>
@@ -4401,7 +4622,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                               },
                             })
                           }
-                          className="px-2 py-1 rounded bg-slate-900 border border-slate-700 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500"
+                          className="px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500"
                         >
                           {materials.map((m) => (
                             <option key={m.id} value={m.id}>
@@ -4423,7 +4644,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             unit={thicknessUnit}
                             minNm={5}
                             stepNm={25}
-                            className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-[11px] font-mono text-white focus:outline-none focus:border-sky-500"
+                            className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-[11px] font-mono tabular-nums text-white focus:outline-none focus:border-sky-500"
                             expression={step.paramBindings?.['bonding.interfaceLayer.thickness']}
                             variables={variables}
                             waferWidth={waferWidth}
@@ -4470,9 +4691,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
               );
 
               return (
-                <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
+                <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-sky-300 flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-sky-300 flex items-center gap-1.5">
                       <Frame className="w-3.5 h-3.5" />
                       <span>Tape &amp; Frame Parameters</span>
                     </span>
@@ -4480,14 +4701,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                   {/* Operation Toggle */}
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Frame Operation
                     </label>
-                    <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px]">
+                    <div className="grid grid-cols-2 gap-0.5 p-0.5 rounded-md bg-slate-900 border border-slate-800 text-[10.5px]">
                       <button
                         type="button"
                         onClick={() => updateTf({ action: 'mount' })}
-                        className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                        className={`py-1 px-1.5 rounded font-medium transition-colors ${
                           tfCfg.action === 'mount'
                             ? 'bg-sky-600 text-white shadow-sm'
                             : 'text-slate-400 hover:text-slate-200'
@@ -4498,7 +4719,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       <button
                         type="button"
                         onClick={() => updateTf({ action: 'demount' })}
-                        className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                        className={`py-1 px-1.5 rounded font-medium transition-colors ${
                           tfCfg.action === 'demount'
                             ? 'bg-sky-600 text-white shadow-sm'
                             : 'text-slate-400 hover:text-slate-200'
@@ -4512,13 +4733,13 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   {tfCfg.action === 'mount' ? (
                     <>
                       <div>
-                        <label className="block text-[11px] text-slate-400 mb-1">
+                        <label className="block text-[10.5px] text-slate-400 mb-0.5">
                           Carrier Tape / Film Type
                         </label>
                         <select
                           value={tfCfg.tapeMaterialId}
                           onChange={(e) => updateTf({ tapeMaterialId: e.target.value })}
-                          className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                          className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                         >
                           {(tapeMaterials.length > 0 ? tapeMaterials : materials).map((m) => (
                             <option key={m.id} value={m.id}>
@@ -4528,9 +4749,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         </select>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="block text-[11px] text-slate-400 mb-1">
+                          <label className="block text-[10.5px] text-slate-400 mb-0.5">
                             Tape Thickness ({getUnitLabel(thicknessUnit)})
                           </label>
                           <ParametricThicknessInput
@@ -4539,7 +4760,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             unit={thicknessUnit}
                             minNm={25}
                             stepNm={50}
-                            className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                            className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                             expression={step.paramBindings?.['tapeFrame.thickness']}
                             variables={variables}
                             waferWidth={waferWidth}
@@ -4552,7 +4773,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         </div>
 
                         <div>
-                          <label className="block text-[11px] text-slate-400 mb-1">
+                          <label className="block text-[10.5px] text-slate-400 mb-0.5">
                             Lamination Tension
                           </label>
                           <select
@@ -4560,7 +4781,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             onChange={(e) =>
                               updateTf({ conformality: e.target.value as 'flat' | 'conformal' })
                             }
-                            className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                            className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                           >
                             <option value="flat">Flat Tensioned Frame</option>
                             <option value="conformal">Conformal Roller Press</option>
@@ -4568,7 +4789,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         </div>
                       </div>
 
-                      <label className="flex items-start gap-2 pt-1 cursor-pointer">
+                      <label className="flex items-start gap-2 pt-0.5 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={tfCfg.showFrame}
@@ -4576,17 +4797,17 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           className="mt-0.5 rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0"
                         />
                         <div>
-                          <span className="text-[11px] font-medium text-slate-200 block">
+                          <span className="text-[10.5px] font-medium text-slate-200 block">
                             Render Stainless Ring Frame Clamps
                           </span>
-                          <span className="text-[10px] text-slate-400 leading-snug block">
+                          <span className="text-[9.5px] text-slate-400 leading-tight block">
                             Shows film-frame edge grips holding the wafer during grinding &amp; singulation.
                           </span>
                         </div>
                       </label>
                     </>
                   ) : (
-                    <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] text-slate-300 leading-relaxed">
+                    <div className="p-2 rounded-md bg-slate-900 border border-slate-800 text-[10.5px] text-slate-300 leading-snug">
                       UV irradiation reduces tape tack and peels the mounted dicing / backgrind carrier tape off the selected wafer side, leaving any singulated dies free.
                     </div>
                   )}
@@ -4626,17 +4847,17 @@ export const StepEditor: React.FC<StepEditorProps> = ({
               };
 
               return (
-                <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
+                <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-orange-400 flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-orange-400 flex items-center gap-1.5">
                       <Slice className="w-3.5 h-3.5" />
                       <span>Wafer Dicing &amp; Singulation</span>
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">
+                      <label className="block text-[10.5px] text-slate-400 mb-0.5">
                         Dicing Method
                       </label>
                       <select
@@ -4656,7 +4877,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             sidewallAngle: defaultAngle,
                           });
                         }}
-                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                        className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                       >
                         <option value="blade">Mechanical Blade Saw</option>
                         <option value="laser-ablation">Laser Ablation / Grooving</option>
@@ -4666,7 +4887,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">
+                      <label className="block text-[10.5px] text-slate-400 mb-0.5">
                         Kerf Width ({getUnitLabel(thicknessUnit)})
                       </label>
                       <ParametricThicknessInput
@@ -4675,7 +4896,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         unit={thicknessUnit}
                         minNm={20}
                         stepNm={25}
-                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                        className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                         expression={step.paramBindings?.['dicing.kerfWidth']}
                         variables={variables}
                         waferWidth={waferWidth}
@@ -4689,14 +4910,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">
+                    <label className="block text-[10.5px] text-slate-400 mb-0.5">
                       Cut Depth Mode
                     </label>
-                    <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px]">
+                    <div className="grid grid-cols-2 gap-0.5 p-0.5 rounded-md bg-slate-900 border border-slate-800 text-[10.5px]">
                       <button
                         type="button"
                         onClick={() => updateDicing({ cutMode: 'through-wafer' })}
-                        className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                        className={`py-1 px-1.5 rounded font-medium transition-colors ${
                           dCfg.cutMode === 'through-wafer'
                             ? 'bg-orange-600 text-white shadow-sm'
                             : 'text-slate-400 hover:text-slate-200'
@@ -4707,7 +4928,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       <button
                         type="button"
                         onClick={() => updateDicing({ cutMode: 'partial-depth' })}
-                        className={`py-1.5 px-2 rounded-md font-medium transition-colors ${
+                        className={`py-1 px-1.5 rounded font-medium transition-colors ${
                           dCfg.cutMode === 'partial-depth'
                             ? 'bg-orange-600 text-white shadow-sm'
                             : 'text-slate-400 hover:text-slate-200'
@@ -4720,7 +4941,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
                   {dCfg.cutMode === 'partial-depth' ? (
                     <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">
+                      <label className="block text-[10.5px] text-slate-400 mb-0.5">
                         Pre-Cut Kerf Depth ({getUnitLabel(thicknessUnit)})
                       </label>
                       <ParametricThicknessInput
@@ -4729,7 +4950,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         unit={thicknessUnit}
                         minNm={20}
                         stepNm={100}
-                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                        className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                         expression={step.paramBindings?.['dicing.cutDepth']}
                         variables={variables}
                         waferWidth={waferWidth}
@@ -4742,7 +4963,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                     </div>
                   ) : (
                     <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">
+                      <label className="block text-[10.5px] text-slate-400 mb-0.5">
                         Dicing Tape Overcut Depth ({getUnitLabel(thicknessUnit)})
                       </label>
                       <ParametricThicknessInput
@@ -4751,7 +4972,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         unit={thicknessUnit}
                         minNm={0}
                         stepNm={25}
-                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                        className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                         expression={step.paramBindings?.['dicing.tapeOvercut']}
                         variables={variables}
                         waferWidth={waferWidth}
@@ -4761,16 +4982,16 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                         onCreateVariable={onCreateVariable}
                         onOpenVariablesModal={onOpenVariablesModal}
                       />
-                      <span className="text-[10px] text-slate-500 block mt-0.5">
+                      <span className="text-[9.5px] text-slate-500 block mt-0.5 leading-tight">
                         Stops cleanly inside mounted dicing tape while cutting all wafer &amp; DAF layers.
                       </span>
                     </div>
                   )}
 
                   <div>
-                    <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                    <div className="flex justify-between text-[10.5px] text-slate-400 mb-0.5">
                       <span>Kerf Sidewall Angle</span>
-                      <span className="font-mono text-orange-400">
+                      <span className="font-mono text-orange-400 tabular-nums">
                         {dCfg.sidewallAngle ?? 90}°{' '}
                         {(dCfg.sidewallAngle ?? 90) < 89 ? '(V-Taper)' : '(Vertical)'}
                       </span>
@@ -4789,9 +5010,9 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   </div>
 
                   {/* Dicing Streets List */}
-                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-semibold text-slate-300">
+                      <span className="text-[10.5px] font-semibold text-slate-300">
                         Dicing Streets ({streets.length})
                       </span>
                       <button
@@ -4807,7 +5028,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                             ],
                           })
                         }
-                        className="flex items-center gap-1 px-2 py-0.5 rounded bg-orange-600 hover:bg-orange-500 text-white text-[11px] font-medium"
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-orange-600 hover:bg-orange-500 text-white text-[10.5px] font-medium"
                       >
                         <Plus className="w-3 h-3" />
                         <span>Add Cut</span>
@@ -4820,7 +5041,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                           key={cnt}
                           type="button"
                           onClick={() => setEvenStreets(cnt)}
-                          className={`flex-1 py-1 rounded text-[10px] font-mono border transition-colors ${
+                          className={`flex-1 py-0.5 rounded text-[9.5px] font-mono border transition-colors ${
                             streets.length === cnt
                               ? 'bg-orange-500/20 border-orange-500/60 text-orange-300'
                               : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
@@ -4831,17 +5052,17 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                       ))}
                     </div>
 
-                    <div className="space-y-1.5 max-h-64 overflow-y-auto pr-0.5">
+                    <div className="space-y-1 max-h-52 overflow-y-auto pr-0.5">
                       {streets.map((st, idx) => {
                         const streetExpr = st.paramBindings?.xCenter;
                         const isStreetOpen = openStreetBindId === st.id;
                         return (
                           <div
                             key={st.id}
-                            className="p-2 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5"
+                            className="p-1.5 rounded-md bg-slate-900 border border-slate-800 space-y-1"
                           >
-                            <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-mono text-orange-400 w-7 shrink-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[9.5px] font-mono text-orange-400 w-6 shrink-0">
                                 #{idx + 1}
                               </span>
                               {streetExpr ? (
@@ -4850,7 +5071,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                   onClick={() =>
                                     setOpenStreetBindId(isStreetOpen ? null : st.id)
                                   }
-                                  className="flex-1 min-w-0 px-2 py-0.5 rounded bg-violet-950/40 border border-violet-500/40 text-left text-[10px] font-mono text-violet-200 truncate"
+                                  className="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-violet-950/40 border border-violet-500/40 text-left text-[9.5px] font-mono text-violet-200 truncate"
                                 >
                                   = {streetExpr}
                                 </button>
@@ -4872,7 +5093,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                                   className="flex-1 accent-orange-500 min-w-0"
                                 />
                               )}
-                              <span className="text-[10px] font-mono text-slate-300 w-14 text-right shrink-0">
+                              <span className="text-[9.5px] font-mono text-slate-300 w-12 text-right shrink-0 tabular-nums">
                                 {(st.xCenter / 1000).toFixed(2)}µm
                               </span>
                               <ParamBindingBadge
@@ -4940,13 +5161,110 @@ export const StepEditor: React.FC<StepEditorProps> = ({
 
         {/* Tab 2: Cleanroom Equipment & SOP Recipe */}
         {activeTab === 'equipment' && (
-          <div className="space-y-3.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
-            <span className="text-xs font-semibold text-sky-400">
-              Cleanroom Run-Sheet & Tool Parameters
-            </span>
+          <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold text-sky-400">
+                Cleanroom Run-Sheet &amp; Tool Parameters
+              </span>
+              {onOpenToolLibrary && (
+                <button
+                  type="button"
+                  onClick={onOpenToolLibrary}
+                  className="flex items-center gap-1 text-[10.5px] text-sky-400 hover:underline shrink-0"
+                >
+                  <Wrench className="w-3 h-3" />
+                  <span>Tool Library</span>
+                </button>
+              )}
+            </div>
+
+            {/* Tool Library Selector */}
+            <div className="p-2 rounded-md bg-slate-900/90 border border-slate-800 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[10.5px] font-medium text-slate-300">
+                  Link Library Equipment
+                </label>
+                {linkedLibraryTool && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectLibraryTool(linkedLibraryTool.id)}
+                    className="text-[9.5px] text-cyan-300 hover:underline"
+                    title="Reset SOP parameters from the linked tool defaults"
+                  >
+                    Reload Defaults
+                  </button>
+                )}
+              </div>
+              <select
+                value={step.toolRecipe?.toolId || ''}
+                onChange={(e) => handleSelectLibraryTool(e.target.value)}
+                aria-label="Select cleanroom tool from library"
+                className="w-full px-2 py-1 rounded-md bg-slate-950 border border-slate-700 text-slate-100 text-[11px] focus:outline-none focus:border-sky-500"
+              >
+                <option value="">-- Custom / Manual Tool Entry --</option>
+                {groupedStepTools.exactMatches.length > 0 && (
+                  <optgroup
+                    label={`Matched (${
+                      stepMechContext.primarySubLabel ||
+                      getMechanismLabel(stepMechContext.mechanism, true)
+                    })`}
+                  >
+                    {groupedStepTools.exactMatches.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {groupedStepTools.mechanismMatches.length > 0 && (
+                  <optgroup
+                    label={`Other ${getMechanismLabel(stepMechContext.mechanism, true)} Tools`}
+                  >
+                    {groupedStepTools.mechanismMatches.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {groupedStepTools.otherTools.length > 0 && (
+                  <optgroup label="All Other Cleanroom Tools">
+                    {groupedStepTools.otherTools.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              {linkedLibraryTool && (
+                <div className="flex flex-wrap items-center justify-between gap-1 text-[9.5px] text-slate-400">
+                  <span className="truncate">
+                    {[linkedLibraryTool.vendor, linkedLibraryTool.bayLocation, linkedLibraryTool.waferSize]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                  <span
+                    className={`font-mono ${
+                      linkedToolMatchLevel === 'exact'
+                        ? 'text-emerald-300'
+                        : linkedToolMatchLevel === 'mechanism'
+                        ? 'text-sky-300'
+                        : 'text-amber-300'
+                    }`}
+                  >
+                    {linkedToolMatchLevel === 'exact'
+                      ? 'Exact sub-mechanism match'
+                      : linkedToolMatchLevel === 'mechanism'
+                      ? 'Mechanism match'
+                      : 'Unmatched sub-mechanism'}
+                  </span>
+                </div>
+              )}
+            </div>
 
             <div>
-              <label className="block text-[11px] text-slate-400 mb-1">
+              <label className="block text-[10.5px] text-slate-400 mb-0.5">
                 Equipment / Tool Tag
               </label>
               <input
@@ -4954,13 +5272,13 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 value={step.toolRecipe?.toolName || ''}
                 onChange={(e) => handleUpdateRecipe('toolName', e.target.value)}
                 placeholder="e.g. Plasma-Therm 790 RIE, Tystar Furnace..."
-                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-sky-500"
+                className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 text-[11px] focus:outline-none focus:border-sky-500"
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="flex items-center gap-1 text-[11px] text-slate-400 mb-1">
+                <label className="flex items-center gap-1 text-[10.5px] text-slate-400 mb-0.5">
                   <Thermometer className="w-3 h-3 text-rose-400" />
                   <span>Temperature</span>
                 </label>
@@ -4969,12 +5287,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   value={step.toolRecipe?.temperature || ''}
                   onChange={(e) => handleUpdateRecipe('temperature', e.target.value)}
                   placeholder="e.g. 950 °C"
-                  className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                  className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] focus:outline-none focus:border-sky-500"
                 />
               </div>
 
               <div>
-                <label className="flex items-center gap-1 text-[11px] text-slate-400 mb-1">
+                <label className="flex items-center gap-1 text-[10.5px] text-slate-400 mb-0.5">
                   <Gauge className="w-3 h-3 text-sky-400" />
                   <span>Chamber Pressure</span>
                 </label>
@@ -4983,14 +5301,14 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   value={step.toolRecipe?.pressure || ''}
                   onChange={(e) => handleUpdateRecipe('pressure', e.target.value)}
                   placeholder="e.g. 20 mTorr"
-                  className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                  className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] focus:outline-none focus:border-sky-500"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="flex items-center gap-1 text-[11px] text-slate-400 mb-1">
+                <label className="flex items-center gap-1 text-[10.5px] text-slate-400 mb-0.5">
                   <Zap className="w-3 h-3 text-amber-400" />
                   <span>RF / ICP Power</span>
                 </label>
@@ -4999,12 +5317,12 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   value={step.toolRecipe?.power || ''}
                   onChange={(e) => handleUpdateRecipe('power', e.target.value)}
                   placeholder="e.g. 150 W RF"
-                  className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                  className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] focus:outline-none focus:border-sky-500"
                 />
               </div>
 
               <div>
-                <label className="flex items-center gap-1 text-[11px] text-slate-400 mb-1">
+                <label className="flex items-center gap-1 text-[10.5px] text-slate-400 mb-0.5">
                   <Clock className="w-3 h-3 text-emerald-400" />
                   <span>Process Duration</span>
                 </label>
@@ -5013,13 +5331,13 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   value={step.toolRecipe?.duration || ''}
                   onChange={(e) => handleUpdateRecipe('duration', e.target.value)}
                   placeholder="e.g. 75 s"
-                  className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                  className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] focus:outline-none focus:border-sky-500"
                 />
               </div>
             </div>
 
             <div>
-              <label className="flex items-center gap-1 text-[11px] text-slate-400 mb-1">
+              <label className="flex items-center gap-1 text-[10.5px] text-slate-400 mb-0.5">
                 <Wind className="w-3 h-3 text-teal-400" />
                 <span>Gas Flows (sccm)</span>
               </label>
@@ -5028,38 +5346,106 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                 value={step.toolRecipe?.gases || ''}
                 onChange={(e) => handleUpdateRecipe('gases', e.target.value)}
                 placeholder="e.g. SF6: 30 sccm, O2: 5 sccm"
-                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] focus:outline-none focus:border-sky-500"
               />
             </div>
 
             <div>
-              <label className="block text-[11px] text-slate-400 mb-1">
-                Metrology & Inspection Checkpoints
+              <label className="block text-[10.5px] text-slate-400 mb-0.5">
+                Metrology &amp; Inspection Checkpoints
               </label>
               <textarea
                 value={step.toolRecipe?.inspectionNotes || ''}
                 onChange={(e) => handleUpdateRecipe('inspectionNotes', e.target.value)}
                 rows={2}
                 placeholder="e.g. Measure step height on Dektak stylus profilometer..."
-                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-sky-500"
+                className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 text-[11px] focus:outline-none focus:border-sky-500"
               />
             </div>
           </div>
         )}
 
-        {/* Step Notes / Description */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            Process Step Notes
-          </label>
-          <textarea
-            value={step.notes || ''}
-            onChange={(e) => handleUpdate({ notes: e.target.value })}
-            rows={2}
-            placeholder="Cleanroom instructions, chemical precautions, target specs..."
-            className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
-          />
-        </div>
+        {/* Tab 3: Process Documentation Notes */}
+        {activeTab === 'notes' && (
+          <div className="space-y-2 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
+            <div className="flex items-center justify-between gap-2">
+              <label
+                htmlFor="step-notes-tab-textarea"
+                className="flex items-center gap-1.5 text-[11px] font-semibold text-cyan-300"
+              >
+                <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span>Notes</span>
+                <span className="text-[10px] font-normal text-slate-500">(Optional)</span>
+              </label>
+              {Boolean(step.notes?.trim()) && (
+                <button
+                  type="button"
+                  onClick={() => handleUpdate({ notes: undefined })}
+                  className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9.5px] text-slate-300 hover:text-white transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <textarea
+              id="step-notes-tab-textarea"
+              value={step.notes || ''}
+              onChange={(e) => handleUpdate({ notes: e.target.value })}
+              onBlur={() => {
+                if (step.notes !== undefined && step.notes.trim() === '') {
+                  handleUpdate({ notes: undefined });
+                }
+              }}
+              rows={5}
+              placeholder="Optional cleanroom instructions, chemical precautions, target specs, or design rationale..."
+              className="w-full px-2 py-1.5 rounded-md bg-slate-900 border border-slate-700 text-slate-100 text-[11px] leading-snug resize-y focus:outline-none focus:border-sky-500 placeholder:text-slate-500"
+            />
+            <p className="text-[10px] text-slate-400 leading-tight">
+              Appears as a documentation label and layer hover tooltip in the cross-section view.
+            </p>
+          </div>
+        )}
+
+        {/* Quick-access Optional Notes below Process / Tool SOP tabs */}
+        {activeTab !== 'notes' && (
+          <div className="pt-2 border-t border-slate-800/80">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <label
+                htmlFor="step-notes-inline-textarea"
+                className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300"
+              >
+                <FileText className="w-3 h-3 text-cyan-400 shrink-0" />
+                <span>Notes</span>
+                <span className="text-[10px] font-normal text-slate-500">(Optional)</span>
+              </label>
+              {Boolean(step.notes?.trim()) && (
+                <button
+                  type="button"
+                  onClick={() => handleUpdate({ notes: undefined })}
+                  className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9.5px] text-slate-300 hover:text-white transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <textarea
+              id="step-notes-inline-textarea"
+              value={step.notes || ''}
+              onChange={(e) => handleUpdate({ notes: e.target.value })}
+              onBlur={() => {
+                if (step.notes !== undefined && step.notes.trim() === '') {
+                  handleUpdate({ notes: undefined });
+                }
+              }}
+              rows={2}
+              placeholder="Optional cleanroom instructions, chemical precautions, target specs..."
+              className="w-full px-2 py-1 rounded-md bg-slate-950 border border-slate-800 text-slate-200 text-[11px] leading-snug resize-y focus:outline-none focus:border-sky-500 placeholder:text-slate-500"
+            />
+            <p className="mt-0.5 text-[9.5px] text-slate-500">
+              Shown in the cross-section view for process documentation.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Wafer Bonding Imported Width Mismatch Modal */}

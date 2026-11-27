@@ -18,6 +18,7 @@ import {
   isMaskAssignedInFlow,
   forkMaskForStepVariant,
   getMaskArrowStepSizes,
+  deriveGlobalAlignmentMarkFromSelection,
   MaskWindowArrayOptions,
   RETICLE_PALETTE,
 } from '../lib/maskUtils';
@@ -62,6 +63,7 @@ import {
   GitBranch,
   FileInput,
   HelpCircle,
+  Crosshair,
 } from 'lucide-react';
 import { GdsLayoutEditor } from './GdsLayoutEditor';
 import { MaskStackView } from './MaskStackView';
@@ -333,6 +335,7 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
     masks: ProcessFlow['masks'];
     steps: ProcessFlow['steps'];
     variables: ProcessFlow['variables'];
+    alignmentMarks?: ProcessFlow['alignmentMarks'];
     selectedMaskId: string;
   }
 
@@ -397,14 +400,15 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
       masks: targetFlow.masks,
       steps: targetFlow.steps,
       variables: targetFlow.variables,
+      alignmentMarks: targetFlow.alignmentMarks,
       selectedMaskId: selId,
     }),
     []
   );
 
   const trackSnapshotsEqual = (a: TrackHistorySnapshot, b: TrackHistorySnapshot): boolean =>
-    JSON.stringify({ m: a.masks, s: a.steps, v: a.variables }) ===
-    JSON.stringify({ m: b.masks, s: b.steps, v: b.variables });
+    JSON.stringify({ m: a.masks, s: a.steps, v: a.variables, a: a.alignmentMarks }) ===
+    JSON.stringify({ m: b.masks, s: b.steps, v: b.variables, a: b.alignmentMarks });
 
   const commitTrackFlow = useCallback(
     (nextFlow: ProcessFlow, options?: { skipHistory?: boolean; nextSelectedMaskId?: string }) => {
@@ -528,6 +532,7 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
       masks: prevSnap.masks,
       steps: prevSnap.steps,
       variables: prevSnap.variables,
+      alignmentMarks: prevSnap.alignmentMarks,
     });
     if (
       prevSnap.selectedMaskId &&
@@ -561,6 +566,7 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
       masks: nextSnap.masks,
       steps: nextSnap.steps,
       variables: nextSnap.variables,
+      alignmentMarks: nextSnap.alignmentMarks,
     });
     if (
       nextSnap.selectedMaskId &&
@@ -1269,6 +1275,95 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
     }
   };
 
+  const handleToggleMaskAlignKey = () => {
+    if (!selectedMask) return;
+    const nextVal = !selectedMask.definesAlignmentMarks;
+    handleUpdateMask({
+      ...selectedMask,
+      definesAlignmentMarks: nextVal ? true : undefined,
+    });
+  };
+
+  const handleToggleWindowAlignKey = (winId: string) => {
+    if (!selectedMask) return;
+    handleUpdateMask({
+      ...selectedMask,
+      windows: selectedMask.windows.map((w) =>
+        w.id === winId ? { ...w, isAlignKey: w.isAlignKey ? undefined : true } : w
+      ),
+    });
+  };
+
+  const handleToggleSelectedAlignKeys = (ids: string[]) => {
+    if (!selectedMask || ids.length === 0) return;
+    const idSet = new Set(ids);
+    const allMarked = selectedMask.windows
+      .filter((w) => idSet.has(w.id))
+      .every((w) => Boolean(w.isAlignKey));
+    const nextVal = allMarked ? undefined : true;
+    handleUpdateMask({
+      ...selectedMask,
+      windows: selectedMask.windows.map((w) =>
+        idSet.has(w.id) ? { ...w, isAlignKey: nextVal } : w
+      ),
+    });
+  };
+
+  const handleDeriveAlignMarks = (overrideSelectedIds?: string[]) => {
+    if (!selectedMask || selectedMask.windows.length === 0) return;
+    const activeIds = overrideSelectedIds ?? selectedWindowIds;
+    const selectedWins =
+      activeIds.length > 0
+        ? selectedMask.windows.filter((w) => activeIds.includes(w.id))
+        : [];
+    const primaryLink =
+      selectedMaskLinks.find((l) => l.isActiveVariant) || selectedMaskLinks[0];
+    const targetStep = primaryLink?.step || assignedStepInfo?.step;
+    const { marks, addedCount, derivedCenterXNm } =
+      deriveGlobalAlignmentMarkFromSelection({
+        existingMarks: latestFlowRef.current.alignmentMarks || [],
+        selectedWindows: selectedWins,
+        allWindows: selectedMask.windows,
+        waferWidth,
+        side: targetStep?.side || 'front',
+        definedByStepId: targetStep?.id,
+      });
+
+    const updatedMask: PhotomaskLevel = selectedMask.definesAlignmentMarks
+      ? selectedMask
+      : { ...selectedMask, definesAlignmentMarks: true };
+    const syncedFlow = updateMaskAndSyncSteps(latestFlowRef.current, updatedMask);
+    const nextFlow: ProcessFlow = resolveFlowParameters({
+      ...syncedFlow,
+      alignmentMarks: marks,
+    });
+    commitTrackFlow(nextFlow);
+
+    if (selectedWins.length > 0 && derivedCenterXNm !== undefined) {
+      const coordTxt = formatCoordDisplay(derivedCenterXNm, apertureUnit, 2);
+      if (addedCount > 0) {
+        handleEditorNotify(
+          selectedWins.length > 1
+            ? `Placed 1 alignment mark centered at ${coordTxt} across ${selectedWins.length} selected shapes.`
+            : `Placed alignment mark centered at ${coordTxt}.`,
+          'success'
+        );
+      } else {
+        handleEditorNotify(
+          `Alignment mark already exists at ${coordTxt}.`,
+          'warn'
+        );
+      }
+    } else if (addedCount > 0) {
+      handleEditorNotify(
+        `Derived ${addedCount} substrate alignment ${addedCount === 1 ? 'mark' : 'marks'} from "${selectedMask.name}".`,
+        'success'
+      );
+    } else {
+      handleEditorNotify('No new alignment marks derived.', 'warn');
+    }
+  };
+
   const handleDuplicateWindow = (winId: string) => {
     if (!selectedMask) return;
     const idx = selectedMask.windows.findIndex((w) => w.id === winId);
@@ -1815,6 +1910,14 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
               <span className="text-[11.5px] font-semibold text-slate-200 truncate group-hover:text-sky-300 transition-colors">
                 {mask.name}
               </span>
+              {(mask.definesAlignmentMarks || mask.windows.some((w) => w.isAlignKey)) && (
+                <span
+                  className="inline-flex items-center gap-0.5 px-1 py-0 rounded-xs bg-cyan-500/15 border border-cyan-500/40 text-[9px] font-mono font-semibold text-cyan-300 shrink-0"
+                  title="Defines alignment key marks"
+                >
+                  <Crosshair className="w-2.5 h-2.5" />
+                </span>
+              )}
             </div>
 
             {/* Duplicate & Clear Track (Assigned) / Delete (Unassigned) actions */}
@@ -2459,6 +2562,21 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                     </div>
 
                     <button
+                      type="button"
+                      onClick={handleToggleMaskAlignKey}
+                      aria-pressed={Boolean(selectedMask.definesAlignmentMarks)}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        selectedMask.definesAlignmentMarks
+                          ? 'bg-cyan-500/20 border-cyan-500/60 text-cyan-200'
+                          : 'bg-slate-950 hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-cyan-300'
+                      }`}
+                      title="Define this mask level as an alignment key mask"
+                    >
+                      <Crosshair className="w-3 h-3 text-cyan-400 shrink-0" />
+                      <span>Align Key</span>
+                    </button>
+
+                    <button
                       onClick={() => handleDuplicateMask(selectedMask)}
                       className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs transition-colors shrink-0"
                       title="Duplicate this Mask Level (creates an unassigned copy)"
@@ -3037,13 +3155,23 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                             className={`absolute top-1 bottom-1 rounded-lg flex items-center justify-center ${dragState ? '' : 'transition-shadow'} ${
                               isActive
                                 ? 'ring-2 ring-white shadow-xl z-20 brightness-110'
+                                : win.isAlignKey
+                                ? 'ring-1 ring-cyan-300 shadow-md z-15'
                                 : 'hover:brightness-110 shadow-md z-10'
                             } ${isLF ? 'border-2' : ''}`}
                             style={{
                               left: `${leftPct}%`,
                               width: `${Math.max(1, widthPct)}%`,
-                              backgroundColor: isLF ? '#0f172a' : accentColor,
-                              borderColor: isLF ? accentColor : undefined,
+                              backgroundColor: isLF
+                                ? '#0f172a'
+                                : win.isAlignKey
+                                ? '#06b6d4'
+                                : accentColor,
+                              borderColor: isLF
+                                ? win.isAlignKey
+                                  ? '#22d3ee'
+                                  : accentColor
+                                : undefined,
                               ...(isLF
                                 ? {
                                     backgroundImage:
@@ -3052,6 +3180,8 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                                 : {}),
                               boxShadow: isActive
                                 ? `0 0 0 2px #ffffff, 0 8px 18px -2px ${accentColor}90`
+                                : win.isAlignKey
+                                ? '0 0 0 1px #22d3ee, 0 3px 10px -2px rgba(34,211,238,0.55)'
                                 : `0 3px 10px -2px ${accentColor}60`,
                               cursor: 'grab',
                             }}
@@ -3077,6 +3207,9 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
 
                             {/* Feature label (width) */}
                             <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-black/50 text-white backdrop-blur-xs select-none pointer-events-none truncate shadow-sm flex items-center gap-1">
+                              {win.isAlignKey && (
+                                <Crosshair className="w-2.5 h-2.5 text-cyan-300 shrink-0" />
+                              )}
                               {(win.paramBindings?.width || win.paramBindings?.xStart || win.paramBindings?.xEnd) && (
                                 <span className="italic text-violet-300 font-bold">fx</span>
                               )}
@@ -3280,6 +3413,50 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                             </button>
                             <button
                               type="button"
+                              disabled={effectiveSelectedIds.length === 0}
+                              onClick={() => handleToggleSelectedAlignKeys(effectiveSelectedIds)}
+                              className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-xs font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none whitespace-nowrap shrink-0 ${
+                                effectiveSelectedIds.length > 0 &&
+                                selectedMask.windows
+                                  .filter((w) => effectiveSelectedIds.includes(w.id))
+                                  .every((w) => Boolean(w.isAlignKey))
+                                  ? 'bg-cyan-500/20 border-cyan-500/60 text-cyan-200'
+                                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 hover:text-cyan-300'
+                              }`}
+                              title={
+                                effectiveSelectedIds.length > 1
+                                  ? `Toggle Align Key on ${effectiveSelectedIds.length} selected ${featWord.toLowerCase()}s`
+                                  : `Toggle Align Key on selected ${featWord.toLowerCase()}`
+                              }
+                            >
+                              <Crosshair className="w-3.5 h-3.5 text-cyan-400" />
+                              <span>Align Key</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeriveAlignMarks(effectiveSelectedIds)}
+                              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/60 text-cyan-200 border border-cyan-500/40 text-xs font-medium transition-colors whitespace-nowrap shrink-0"
+                              title={
+                                effectiveSelectedIds.length > 1
+                                  ? `Place 1 global alignment mark centered within the ${effectiveSelectedIds.length} selected ${featWord.toLowerCase()}s`
+                                  : effectiveSelectedIds.length === 1
+                                  ? `Place 1 global alignment mark centered on selected ${featWord} W-${singleSelIdx + 1}`
+                                  : selectedMask.windows.some((w) => w.isAlignKey)
+                                  ? 'Derive substrate alignment marks from shapes flagged as Align Keys'
+                                  : 'Derive substrate alignment marks from window centers'
+                              }
+                            >
+                              <Crosshair className="w-3.5 h-3.5 text-cyan-400" />
+                              <span>
+                                {effectiveSelectedIds.length > 1
+                                  ? `Derive Center Mark (${effectiveSelectedIds.length})`
+                                  : effectiveSelectedIds.length === 1
+                                  ? 'Derive Mark'
+                                  : 'Derive Marks'}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
                               disabled={!singleSelWin}
                               onClick={() => {
                                 if (!singleSelWin) return;
@@ -3396,6 +3573,25 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                             />
                           </div>
                           <div className="flex items-center gap-0.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleWindowAlignKey(win.id);
+                              }}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                win.isAlignKey
+                                  ? 'text-cyan-300 bg-cyan-500/20'
+                                  : 'text-slate-400 hover:text-cyan-300 hover:bg-cyan-500/10'
+                              }`}
+                              title={
+                                win.isAlignKey
+                                  ? `Unmark ${featLabel} as Align Key`
+                                  : `Define ${featLabel} as Align Key`
+                              }
+                            >
+                              <Crosshair className="w-3.5 h-3.5" />
+                            </button>
                             <button
                               type="button"
                               onClick={(e) => {
@@ -3662,9 +3858,21 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
                               <td className="px-2 py-1 font-mono text-[11px] text-slate-300 whitespace-nowrap">
                                 <span
                                   className="inline-block w-2 h-2 rounded-full mr-1.5"
-                                  style={{ backgroundColor: selectedMask.color || '#38bdf8' }}
+                                  style={{
+                                    backgroundColor: win.isAlignKey
+                                      ? '#22d3ee'
+                                      : selectedMask.color || '#38bdf8',
+                                  }}
                                 />
-                                W-{idx + 1}
+                                <span>W-{idx + 1}</span>
+                                {win.isAlignKey && (
+                                  <span
+                                    className="ml-1.5 inline-flex items-center gap-0.5 px-1 py-0 rounded-xs bg-cyan-500/15 border border-cyan-500/40 text-[9px] font-semibold text-cyan-300"
+                                    title="Defined as Alignment Key shape"
+                                  >
+                                    KEY
+                                  </span>
+                                )}
                               </td>
 
                               <td className="px-2 py-1">
@@ -3785,6 +3993,26 @@ export const MaskLevelsModal: React.FC<MaskLevelsModalProps> = ({
 
                               <td className="px-2 py-1 text-right">
                                 <div className="inline-flex items-center justify-end gap-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleToggleWindowAlignKey(win.id);
+                                    }}
+                                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium transition-colors ${
+                                      win.isAlignKey
+                                        ? 'bg-cyan-500/20 border-cyan-500/60 text-cyan-200'
+                                        : 'bg-slate-900 hover:bg-slate-800 border-slate-700/80 text-slate-400 hover:text-cyan-300'
+                                    }`}
+                                    title={
+                                      win.isAlignKey
+                                        ? `Unmark ${featLabel} W-${idx + 1} as Align Key`
+                                        : `Define ${featLabel} W-${idx + 1} as Align Key`
+                                    }
+                                  >
+                                    <Crosshair className="w-3 h-3" />
+                                    <span>Key</span>
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={(e) => {

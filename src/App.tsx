@@ -11,6 +11,8 @@ import {
   EtchRecipe,
   VariableUnit,
   SacrificialReleaseRegion,
+  CleanroomTool,
+  GlobalAlignmentMark,
 } from './types/microfab';
 import { PRESET_PROCESS_FLOWS } from './lib/presets';
 import {
@@ -26,6 +28,7 @@ import { StepEditor } from './components/StepEditor';
 import { MultiStepFlowView } from './components/MultiStepFlowView';
 import { MaterialsModal } from './components/MaterialsModal';
 import { EtchRateLibraryModal } from './components/EtchRateLibraryModal';
+import { ToolLibraryModal } from './components/ToolLibraryModal';
 import { RunSheetModal } from './components/RunSheetModal';
 import { PresetPickerModal } from './components/PresetPickerModal';
 import { MaskLevelsModal } from './components/MaskLevelsModal';
@@ -53,9 +56,10 @@ import {
   formatEtchRate,
   formatDurationCompact,
 } from './lib/etchRates';
+import { getCleanroomTools, buildToolRecipeFromTool } from './lib/toolLibrary';
 import { downloadProcessFlowCsv } from './lib/csvExportUtils';
 import { ThicknessUnit } from './lib/units';
-import { ListOrdered, Layers as LayersIcon, Sliders as SlidersIcon, X, Minimize } from 'lucide-react';
+import { ListOrdered, Layers as LayersIcon, Sliders as SlidersIcon, X, Minimize, Scan } from 'lucide-react';
 
 export default function App() {
   // Load initial process from localStorage if present, or fallback to CMOS preset
@@ -91,6 +95,16 @@ export default function App() {
               // ignore
             }
           }
+          if (!parsed.toolLibrary) {
+            try {
+              const savedCustomTools = localStorage.getItem('microflow_custom_tools');
+              if (savedCustomTools) {
+                parsed.toolLibrary = JSON.parse(savedCustomTools);
+              }
+            } catch {
+              // ignore
+            }
+          }
           return resolveFlowParameters(ensureFlowBlocks(ensureFlowMasks(parsed)));
         }
       }
@@ -102,6 +116,10 @@ export default function App() {
       const savedCustomEtch = localStorage.getItem('microflow_custom_etch_recipes');
       if (savedCustomEtch) {
         basePreset.etchLibrary = JSON.parse(savedCustomEtch);
+      }
+      const savedCustomTools = localStorage.getItem('microflow_custom_tools');
+      if (savedCustomTools) {
+        basePreset.toolLibrary = JSON.parse(savedCustomTools);
       }
     } catch {
       // ignore
@@ -147,6 +165,7 @@ export default function App() {
   }>({ open: false, initialMode: 'steps-and-masks' });
   const [showMaterials, setShowMaterials] = useState<boolean>(false);
   const [showEtchLibrary, setShowEtchLibrary] = useState<boolean>(false);
+  const [showToolLibrary, setShowToolLibrary] = useState<boolean>(false);
   const [showMaskLevels, setShowMaskLevels] = useState<boolean>(false);
   const [focusMaskId, setFocusMaskId] = useState<string | undefined>(undefined);
   const [showVariables, setShowVariables] = useState<boolean>(false);
@@ -169,7 +188,14 @@ export default function App() {
   const [rightSidebarOpen, setRightSidebarOpen] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
   );
-  const [isMaskTrackMinimized, setIsMaskTrackMinimized] = useState<boolean>(false);
+  const [isMaskTrackOpen, setIsMaskTrackOpen] = useState<boolean>(false);
+  const [isMaskTrackPinned, setIsMaskTrackPinned] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!isMaskTrackPinned) {
+      setIsMaskTrackOpen(false);
+    }
+  }, [activeStepIndex, isMaskTrackPinned]);
   const [showFinalInset, setShowFinalInset] = useState<boolean>(() => {
     try {
       return localStorage.getItem('microflow_show_final_inset') === 'true';
@@ -308,7 +334,7 @@ export default function App() {
 
   const handleTogglePlay = () => {
     if (!isPlaying) {
-      setIsMaskTrackMinimized(true);
+      setIsMaskTrackOpen(false);
       if (typeof window !== 'undefined' && window.innerWidth < 1024) {
         setLeftSidebarOpen(false);
       }
@@ -364,6 +390,36 @@ export default function App() {
       }
     }
     return list;
+  }, [flow.steps, activeStepIndex]);
+
+  const nearbyLithoContext = useMemo(() => {
+    for (let i = Math.min(activeStepIndex - 1, flow.steps.length - 1); i >= 0; i--) {
+      const s = flow.steps[i];
+      if (s.enabled !== false && s.type === 'lithography') {
+        return {
+          relation: 'last' as const,
+          stepIndex: i,
+          stepNumber: i + 1,
+          title: s.title,
+          maskId: s.lithography?.maskId,
+          maskName: s.lithography?.maskName || 'Photomask Layer',
+        };
+      }
+    }
+    for (let i = Math.max(0, activeStepIndex + 1); i < flow.steps.length; i++) {
+      const s = flow.steps[i];
+      if (s.enabled !== false && s.type === 'lithography') {
+        return {
+          relation: 'next' as const,
+          stepIndex: i,
+          stepNumber: i + 1,
+          title: s.title,
+          maskId: s.lithography?.maskId,
+          maskName: s.lithography?.maskName || 'Photomask Layer',
+        };
+      }
+    }
+    return null;
   }, [flow.steps, activeStepIndex]);
 
   useEffect(() => {
@@ -652,11 +708,18 @@ export default function App() {
     [flow.etchLibrary]
   );
 
+  const allTools = useMemo(
+    () => getCleanroomTools(flow.toolLibrary),
+    [flow.toolLibrary]
+  );
+
   const handleSelectPreset = (preset: ProcessFlow) => {
-    const withEtchLib = flow.etchLibrary?.length
-      ? { ...preset, etchLibrary: flow.etchLibrary }
-      : preset;
-    setFlow(resolveFlowParameters(ensureFlowBlocks(ensureFlowMasks(withEtchLib))));
+    const withLibraries: ProcessFlow = {
+      ...preset,
+      ...(flow.etchLibrary?.length ? { etchLibrary: flow.etchLibrary } : {}),
+      ...(flow.toolLibrary?.length ? { toolLibrary: flow.toolLibrary } : {}),
+    };
+    setFlow(resolveFlowParameters(ensureFlowBlocks(ensureFlowMasks(withLibraries))));
     setActiveStepIndex(preset.steps.length > 0 ? 0 : -1);
     setSelectedInsetStepIndex(null);
     setIsPlaying(false);
@@ -676,6 +739,83 @@ export default function App() {
     setFlow({ ...flow, etchLibrary: updatedCustom });
   };
 
+  const handleUpdateTools = (updatedCustom: CleanroomTool[]) => {
+    try {
+      localStorage.setItem('microflow_custom_tools', JSON.stringify(updatedCustom));
+    } catch {
+      // ignore
+    }
+    setFlow({ ...flow, toolLibrary: updatedCustom });
+  };
+
+  const handleApplyToolToStep = (tool: CleanroomTool, syncSubMechanism?: boolean) => {
+    if (!activeStep) return;
+    const nextToolRecipe = buildToolRecipeFromTool(tool, activeStep.toolRecipe);
+    const patch: Partial<ProcessStep> = {
+      toolRecipe: nextToolRecipe,
+    };
+
+    if (syncSubMechanism) {
+      const cap = tool.capabilities.find((c) => c.mechanism === activeStep.type);
+      const firstSub = cap?.subMechanisms?.[0];
+      if (firstSub) {
+        if (activeStep.type === 'deposition' && activeStep.deposition) {
+          patch.deposition = {
+            ...activeStep.deposition,
+            method: firstSub as NonNullable<ProcessStep['deposition']>['method'],
+          };
+        } else if (activeStep.type === 'etch' && activeStep.etch) {
+          patch.etch = {
+            ...activeStep.etch,
+            etchType: firstSub as NonNullable<ProcessStep['etch']>['etchType'],
+          };
+        } else if (activeStep.type === 'lithography' && activeStep.lithography) {
+          if (['spin-coat', 'lor-bilayer', 'dry-film'].includes(firstSub)) {
+            patch.lithography = {
+              ...activeStep.lithography,
+              coatMethod: firstSub as NonNullable<ProcessStep['lithography']>['coatMethod'],
+            };
+          } else {
+            patch.lithography = {
+              ...activeStep.lithography,
+              exposureMethod: firstSub as NonNullable<ProcessStep['lithography']>['exposureMethod'],
+            };
+          }
+        } else if (activeStep.type === 'strip' && activeStep.strip) {
+          patch.strip = {
+            ...activeStep.strip,
+            stripType: firstSub as NonNullable<ProcessStep['strip']>['stripType'],
+          };
+        } else if (activeStep.type === 'cmp' && activeStep.cmp) {
+          patch.cmp = {
+            ...activeStep.cmp,
+            operation: firstSub as NonNullable<ProcessStep['cmp']>['operation'],
+          };
+        } else if (activeStep.type === 'bonding' && activeStep.bonding) {
+          patch.bonding = {
+            ...activeStep.bonding,
+            bondingMethod: firstSub as NonNullable<ProcessStep['bonding']>['bondingMethod'],
+          };
+        } else if (activeStep.type === 'dicing' && activeStep.dicing) {
+          patch.dicing = {
+            ...activeStep.dicing,
+            method: firstSub as NonNullable<ProcessStep['dicing']>['method'],
+          };
+        } else if (activeStep.type === 'tape-frame' && activeStep.tapeFrame) {
+          patch.tapeFrame = {
+            ...activeStep.tapeFrame,
+            action: firstSub as NonNullable<ProcessStep['tapeFrame']>['action'],
+          };
+        }
+      }
+    }
+
+    handleUpdateStep({
+      ...activeStep,
+      ...patch,
+    });
+  };
+
   const handleApplyEtchRecipeToStep = (
     recipe: EtchRecipe,
     rateMode: 'manual' | 'time-rate',
@@ -693,6 +833,21 @@ export default function App() {
       rateMode === 'time-rate' && refRate > 0
         ? Math.max(5, Math.round((refRate * etchTimeSec) / 60))
         : activeStep.etch?.depth ?? activeStep.thickness ?? 300;
+
+    const nextToolName = recipe.toolName || activeStep.toolRecipe?.toolName || '';
+    const matchedTool = recipe.toolName
+      ? allTools.find(
+          (t) =>
+            (t.name.toLowerCase() === recipe.toolName!.toLowerCase() ||
+              t.defaultRecipe?.toolName?.toLowerCase() === recipe.toolName!.toLowerCase()) &&
+            t.capabilities.some((c) => c.mechanism === 'etch')
+        )
+      : undefined;
+    const nextToolId = matchedTool
+      ? matchedTool.id
+      : recipe.toolName
+      ? undefined
+      : activeStep.toolRecipe?.toolId;
 
     handleUpdateStep({
       ...activeStep,
@@ -728,7 +883,8 @@ export default function App() {
           temperature: '',
           duration: '',
         }),
-        toolName: recipe.toolName || activeStep.toolRecipe?.toolName || '',
+        toolId: nextToolId,
+        toolName: nextToolName,
         gases: recipe.gases || recipe.chemistry,
         power: recipe.power || '',
         pressure: recipe.pressure || '',
@@ -803,6 +959,7 @@ export default function App() {
           onOpenPresets={() => setShowPresets(true)}
           onOpenMaterials={() => setShowMaterials(true)}
           onOpenEtchLibrary={() => setShowEtchLibrary(true)}
+          onOpenToolLibrary={() => setShowToolLibrary(true)}
           onOpenMaskLevels={() => {
             setFocusMaskId(undefined);
             setShowMaskLevels(true);
@@ -911,7 +1068,7 @@ export default function App() {
 
         {/* Adjacent: Substrate Layer Editor OR Step Deep Parameters Editor (Docked next to Process Timeline) */}
         {!isFocusFullscreen && rightSidebarOpen && (
-          <aside className="fixed inset-y-0 left-0 z-40 w-[88vw] max-w-[370px] h-full border-r border-slate-800 bg-slate-900 shadow-2xl flex flex-col lg:static lg:z-auto lg:w-80 xl:w-[340px] lg:shadow-none flex-shrink-0">
+          <aside className="fixed inset-y-0 left-0 z-40 w-[86vw] max-w-[340px] h-full border-r border-slate-800 bg-slate-900 shadow-2xl flex flex-col lg:static lg:z-auto lg:w-[300px] xl:w-[316px] lg:shadow-none flex-shrink-0">
             <div className="lg:hidden flex items-center justify-between px-3 py-2 bg-slate-950 border-b border-slate-800 shrink-0">
               <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
                 <SlidersIcon className="w-3.5 h-3.5 text-sky-400" />
@@ -943,10 +1100,12 @@ export default function App() {
                   waferWidth={flow.substrateWidth}
                   materials={flow.materials}
                   etchRecipes={allEtchRecipes}
+                  tools={allTools}
                   thicknessUnit={thicknessUnit}
                   onUpdateStep={handleUpdateStep}
                   onOpenMaterialsModal={() => setShowMaterials(true)}
                   onOpenEtchLibrary={() => setShowEtchLibrary(true)}
+                  onOpenToolLibrary={() => setShowToolLibrary(true)}
                   onMergeMaterials={(incomingMats) => {
                     const existingIds = new Set(flow.materials.map((m) => m.id));
                     const missing = incomingMats.filter((m) => !existingIds.has(m.id));
@@ -967,6 +1126,8 @@ export default function App() {
                   onOpenVariantManager={() => setShowVariantManager(true)}
                   pickReleaseMode={pickReleaseMode}
                   onTogglePickReleaseMode={handleTogglePickReleaseMode}
+                  isMaskTrackOpen={isMaskTrackOpen}
+                  onToggleMaskTrack={() => setIsMaskTrackOpen((prev) => !prev)}
                   onOpenMaskLevelsModal={(maskId) => {
                     setFocusMaskId(maskId);
                     setShowMaskLevels(true);
@@ -992,25 +1153,90 @@ export default function App() {
           </aside>
         )}
 
-        {/* Main Viewport: Canvas & Photomask Track */}
-        <main className="flex-1 flex flex-col h-full bg-[#030712] p-1.5 sm:p-3 overflow-hidden space-y-2 sm:space-y-3 min-w-0">
-          {/* Photomask Aperture Editor (Active if current step is Lithography) */}
-          {!isFocusFullscreen && activeStep && activeStep.type === 'lithography' && (
-            <div className="flex-shrink-0">
-              <MaskEditor
-                step={activeStep}
-                waferWidth={flow.substrateWidth}
-                onUpdateStep={handleUpdateStep}
-                onOpenMaskLevels={() => {
-                  setFocusMaskId(activeStep.lithography?.maskId);
-                  setShowMaskLevels(true);
-                }}
-                isMinimized={isMaskTrackMinimized}
-                onToggleMinimize={() => setIsMaskTrackMinimized((prev) => !prev)}
-                variables={flow.variables || []}
-                onCreateVariable={handleCreateVariable}
-                onOpenVariablesModal={() => setShowVariables(true)}
-              />
+        {/* Main Viewport: Persistent Fixed-Height Photomask Slot + Interactive Cross-Section Canvas */}
+        <main className="flex-1 flex flex-col h-full bg-[#030712] p-1.5 sm:p-3 overflow-hidden gap-2 min-w-0">
+          {/* Permanent Fixed-Height (36px) Track Slot — zero height change across all step types */}
+          {!isFocusFullscreen && (
+            <div className="h-9 shrink-0 relative z-[35]">
+              {activeStep && activeStep.type === 'lithography' ? (
+                <MaskEditor
+                  step={activeStep}
+                  waferWidth={flow.substrateWidth}
+                  onUpdateStep={handleUpdateStep}
+                  onOpenMaskLevels={() => {
+                    setFocusMaskId(activeStep.lithography?.maskId);
+                    setShowMaskLevels(true);
+                  }}
+                  alignmentMarks={flow.alignmentMarks || []}
+                  onUpdateAlignmentMarks={(marks: GlobalAlignmentMark[]) =>
+                    setFlow((prev) =>
+                      resolveFlowParameters({
+                        ...prev,
+                        alignmentMarks: marks,
+                      })
+                    )
+                  }
+                  isMinimized={!isMaskTrackOpen}
+                  onToggleMinimize={() => setIsMaskTrackOpen((prev) => !prev)}
+                  isPinned={isMaskTrackPinned}
+                  onTogglePin={() => setIsMaskTrackPinned((prev) => !prev)}
+                  dockPosition="top"
+                  overlayExpand={true}
+                  variables={flow.variables || []}
+                  onCreateVariable={handleCreateVariable}
+                  onOpenVariablesModal={() => setShowVariables(true)}
+                />
+              ) : (
+                <div className="h-9 bg-slate-900/80 border border-slate-800 rounded-xl px-3 flex items-center justify-between gap-2 text-slate-400">
+                  <div className="flex items-center gap-2 min-w-0 text-[11px]">
+                    <span className="font-semibold tracking-wider uppercase text-slate-500 whitespace-nowrap shrink-0">
+                      Photomask Track
+                    </span>
+                    <span className="text-slate-700 shrink-0">·</span>
+                    {nearbyLithoContext ? (
+                      <div className="flex items-center gap-1.5 min-w-0 truncate">
+                        <span className="text-slate-500 shrink-0">
+                          {nearbyLithoContext.relation === 'last' ? 'Last reticle:' : 'Next reticle:'}
+                        </span>
+                        <span className="font-mono text-slate-300 truncate">
+                          {nearbyLithoContext.maskName}
+                        </span>
+                        <span className="text-slate-600 shrink-0 hidden sm:inline">·</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveStepIndex(nearbyLithoContext.stepIndex);
+                            setIsPlaying(false);
+                          }}
+                          className="text-sky-400 hover:text-sky-300 hover:underline font-mono text-[10.5px] whitespace-nowrap shrink-0 hidden sm:inline"
+                          title={`Jump to Step ${nearbyLithoContext.stepNumber}: ${nearbyLithoContext.title}`}
+                        >
+                          Step {nearbyLithoContext.stepNumber} →
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-slate-500 truncate">
+                        No active reticle on this step
+                      </span>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFocusMaskId(nearbyLithoContext?.maskId);
+                      setShowMaskLevels(true);
+                    }}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-medium text-sky-400 hover:text-sky-300 transition-colors whitespace-nowrap shrink-0"
+                    title="Open Photolithography Mask Levels Panel"
+                  >
+                    <Scan className="w-3 h-3" />
+                    <span className="hidden sm:inline">
+                      Masks{flow.masks?.length ? ` (${flow.masks.length})` : ''}
+                    </span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -1045,6 +1271,20 @@ export default function App() {
                   : activeStep?.title
               }
               activeStepSide={isSubstrateActive ? undefined : activeStep?.side}
+              activeStepType={isSubstrateActive ? 'substrate' : activeStep?.type}
+              activeStepNotes={isSubstrateActive ? undefined : activeStep?.notes}
+              activeLithography={
+                !isSubstrateActive && activeStep?.type === 'lithography'
+                  ? activeStep.lithography
+                  : undefined
+              }
+              alignmentMarks={flow.alignmentMarks || []}
+              substrateTopY={
+                flow.substrateLayers && flow.substrateLayers.length > 0
+                  ? flow.substrateLayers.reduce((acc, l) => acc + Math.max(1, l.thickness), 0)
+                  : flow.substrateThickness || 3000
+              }
+              steps={flow.steps}
               finalMesh={finalMesh}
               finalPolygons={finalPolygons}
               finalStepNumber={
@@ -1178,6 +1418,16 @@ export default function App() {
           onUpdateRecipes={handleUpdateEtchRecipes}
           onApplyRecipeToStep={handleApplyEtchRecipeToStep}
           onClose={() => setShowEtchLibrary(false)}
+        />
+      )}
+
+      {showToolLibrary && (
+        <ToolLibraryModal
+          tools={allTools}
+          activeStep={isSubstrateActive ? undefined : activeStep}
+          onUpdateTools={handleUpdateTools}
+          onApplyToolToStep={handleApplyToolToStep}
+          onClose={() => setShowToolLibrary(false)}
         />
       )}
 

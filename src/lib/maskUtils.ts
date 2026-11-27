@@ -7,10 +7,12 @@ import {
   ProcessFlow,
   ProcessStep,
   ProcessStepVariant,
+  ProcessSide,
   PhotomaskLevel,
   MaskWindow,
   MaskFieldPolarity,
   LithographyConfig,
+  GlobalAlignmentMark,
 } from '../types/microfab';
 import { resolveResistMaterialId } from './materials';
 import { syncActiveVariantSnapshot, getActiveStepVariant } from './variantUtils';
@@ -172,6 +174,7 @@ export function ensureFlowMasks(flow: ProcessFlow): ProcessFlow {
         color: RETICLE_PALETTE[(levelNum - 1) % RETICLE_PALETTE.length],
         windows: litho.windows ? litho.windows.map((w) => ({ ...w })) : [],
         assignedStepId: step.id,
+        ...(litho.definesAlignmentMarks ? { definesAlignmentMarks: true } : {}),
       };
       existingMasks.push(matchingMask);
       stepsUpdated = true;
@@ -183,6 +186,7 @@ export function ensureFlowMasks(flow: ProcessFlow): ProcessFlow {
           maskName: matchingMask.name,
           maskColor: matchingMask.color,
           maskField: matchingMask.maskField || 'dark-field',
+          ...(matchingMask.definesAlignmentMarks ? { definesAlignmentMarks: true } : {}),
         },
       };
     } else {
@@ -193,10 +197,14 @@ export function ensureFlowMasks(flow: ProcessFlow): ProcessFlow {
       if (!matchingMask.maskField) {
         matchingMask.maskField = litho.maskField || 'dark-field';
       }
+      if (litho.definesAlignmentMarks && matchingMask.definesAlignmentMarks === undefined) {
+        matchingMask.definesAlignmentMarks = true;
+      }
       if (
         litho.maskId !== matchingMask.id ||
         litho.maskColor !== matchingMask.color ||
-        litho.maskField !== matchingMask.maskField
+        litho.maskField !== matchingMask.maskField ||
+        Boolean(litho.definesAlignmentMarks) !== Boolean(matchingMask.definesAlignmentMarks)
       ) {
         stepsUpdated = true;
         return {
@@ -207,6 +215,7 @@ export function ensureFlowMasks(flow: ProcessFlow): ProcessFlow {
             maskName: matchingMask.name,
             maskColor: matchingMask.color,
             maskField: matchingMask.maskField,
+            definesAlignmentMarks: matchingMask.definesAlignmentMarks,
           },
         };
       }
@@ -262,6 +271,7 @@ export function attachNewMaskToLithoStep(
         ? partial.windows.map((w) => ({ ...w }))
         : (litho.windows || []).map((w) => ({ ...w })),
     assignedStepId: targetStep.id,
+    definesAlignmentMarks: partial?.definesAlignmentMarks ?? litho.definesAlignmentMarks,
   };
 
   // Enforce 1-to-1 slot assignment (preserving reticles bound to other variants of the same step)
@@ -294,6 +304,7 @@ export function attachNewMaskToLithoStep(
         maskField: newMask.maskField || 'dark-field',
         resistMaterialId: resolveResistMaterialId(newMask.polarity, litho.resistMaterialId),
         windows: newMask.windows.map((w) => ({ ...w })),
+        definesAlignmentMarks: newMask.definesAlignmentMarks,
       },
     });
   });
@@ -318,6 +329,7 @@ function applyMaskFieldsToLitho(
     maskName: mask.name,
     maskId: mask.id,
     maskColor: mask.color,
+    definesAlignmentMarks: mask.definesAlignmentMarks,
   };
 }
 
@@ -718,6 +730,8 @@ export function forkMaskForStepVariant(
     maskField: variant.lithography?.maskField || sourceMask.maskField || 'dark-field',
     assignedStepId: step.id,
     assignedVariantId: variant.id,
+    definesAlignmentMarks:
+      variant.lithography?.definesAlignmentMarks ?? sourceMask.definesAlignmentMarks,
   };
 
   // Pin sourceMask to another variant still referencing it if it wasn't pinned yet
@@ -822,6 +836,7 @@ export function syncStepWindowsToMask(
           windows: litho.windows.map((w) => ({ ...w })),
           assignedStepId: step.id,
           assignedVariantId: activeVar.id,
+          definesAlignmentMarks: litho.definesAlignmentMarks,
         };
 
         // Keep the original shared mask untouched for the sibling variant(s)
@@ -893,6 +908,7 @@ export function syncStepWindowsToMask(
       mask.windows = litho.windows.map((w) => ({ ...w }));
       mask.polarity = litho.polarity;
       mask.maskField = litho.maskField || mask.maskField || 'dark-field';
+      mask.definesAlignmentMarks = litho.definesAlignmentMarks;
       if (litho.maskName) mask.name = litho.maskName;
       mask.assignedStepId = step.id;
 
@@ -935,6 +951,7 @@ export function syncStepWindowsToMask(
                 maskName: mask.name,
                 maskColor: mask.color,
                 maskField: mask.maskField || 'dark-field',
+                definesAlignmentMarks: mask.definesAlignmentMarks,
                 windows: mask.windows.map((w) => ({ ...w })),
               },
             };
@@ -992,6 +1009,7 @@ export function createNewMaskInFlow(
       : [{ id: `w_${Date.now()}`, xStart: wStart, xEnd: wEnd }],
     assignedStepId: partial?.assignedStepId,
     assignedVariantId: partial?.assignedVariantId,
+    definesAlignmentMarks: partial?.definesAlignmentMarks,
   };
 
   const updatedFlow = {
@@ -1175,6 +1193,7 @@ export function duplicateMaskWindow(
     xStart: clampedStart,
     xEnd: nextEnd,
     ...(source.fixedWidth ? { fixedWidth: true } : {}),
+    ...(source.isAlignKey ? { isAlignKey: true } : {}),
     ...(inheritedBindings ? { paramBindings: inheritedBindings } : {}),
   };
 }
@@ -1235,6 +1254,7 @@ export function createMaskWindowArray(
         xStart: cStart,
         xEnd: cEnd,
         ...(source.fixedWidth ? { fixedWidth: true } : {}),
+        ...(source.isAlignKey ? { isAlignKey: true } : {}),
         ...(inheritedBindings ? { paramBindings: inheritedBindings } : {}),
       });
     }
@@ -1279,6 +1299,7 @@ export function createMaskWindowArray(
       xStart: cStart,
       xEnd: cEnd,
       ...(source.fixedWidth ? { fixedWidth: true } : {}),
+      ...(source.isAlignKey ? { isAlignKey: true } : {}),
       ...(inheritedBindings ? { paramBindings: inheritedBindings } : {}),
     });
   }
@@ -1294,6 +1315,133 @@ export function createMaskWindowArray(
     addedIds: copies.map((c) => c.id),
     totalPlaced: 1 + copies.length,
     skippedOutOfBounds: skipped,
+  };
+}
+
+const DEFAULT_ALIGN_MARK_COLORS = ['#22d3ee', '#34d399', '#f472b6', '#a78bfa', '#fbbf24'];
+
+/**
+ * Derives global substrate alignment mark(s) from mask windows:
+ * - When `selectedWindows.length > 0`, places a SINGLE mark centered within the bounding box
+ *   of all selected shapes (`(min(xStart) + max(xEnd)) / 2`).
+ * - When no shapes are selected, derives marks from windows flagged `isAlignKey` (if any),
+ *   or from all windows on the mask otherwise.
+ */
+export function deriveGlobalAlignmentMarkFromSelection(params: {
+  existingMarks: GlobalAlignmentMark[];
+  selectedWindows: MaskWindow[];
+  allWindows: MaskWindow[];
+  waferWidth: number;
+  side?: ProcessSide;
+  definedByStepId?: string;
+  palette?: string[];
+}): {
+  marks: GlobalAlignmentMark[];
+  addedCount: number;
+  derivedCenterXNm?: number;
+} {
+  const {
+    existingMarks,
+    selectedWindows,
+    allWindows,
+    waferWidth,
+    side = 'front',
+    definedByStepId,
+    palette = DEFAULT_ALIGN_MARK_COLORS,
+  } = params;
+
+  const markSide: ProcessSide =
+    side === 'back' ? 'back' : side === 'both' ? 'both' : 'front';
+
+  if (selectedWindows.length > 0) {
+    const minStart = Math.min(...selectedWindows.map((w) => w.xStart));
+    const maxEnd = Math.max(...selectedWindows.map((w) => w.xEnd));
+    const centerX = Math.max(
+      0,
+      Math.min(waferWidth, Math.round((minStart + maxEnd) / 2))
+    );
+
+    const alreadyExists = existingMarks.some(
+      (m) =>
+        Math.abs(m.xNm - centerX) <= 1 &&
+        (definedByStepId === undefined || m.definedByStepId === definedByStepId)
+    );
+    if (alreadyExists) {
+      return { marks: existingMarks, addedCount: 0, derivedCenterXNm: centerX };
+    }
+
+    const usedLabels = new Set(existingMarks.map((m) => m.label.toLowerCase()));
+    let nextIdx = existingMarks.length + 1;
+    let label = `AM-${nextIdx}`;
+    while (usedLabels.has(label.toLowerCase())) {
+      nextIdx += 1;
+      label = `AM-${nextIdx}`;
+    }
+
+    const newMark: GlobalAlignmentMark = {
+      id: `am_${definedByStepId || 'mask'}_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 5)}`,
+      label,
+      xNm: centerX,
+      side: markSide,
+      color: palette[existingMarks.length % palette.length],
+      ...(definedByStepId ? { definedByStepId } : {}),
+    };
+
+    return {
+      marks: [...existingMarks, newMark],
+      addedCount: 1,
+      derivedCenterXNm: centerX,
+    };
+  }
+
+  const alignKeyWindows = allWindows.filter((w) => w.isAlignKey);
+  const sourceWindows = alignKeyWindows.length > 0 ? alignKeyWindows : allWindows;
+  if (sourceWindows.length === 0) {
+    return { marks: existingMarks, addedCount: 0 };
+  }
+
+  const baseMarks = definedByStepId
+    ? existingMarks.filter((m) => m.definedByStepId !== definedByStepId)
+    : existingMarks;
+  const usedLabels = new Set(baseMarks.map((m) => m.label.toLowerCase()));
+  let nextIdx = 1;
+
+  const derivedMarks: GlobalAlignmentMark[] = [];
+  sourceWindows.forEach((win, idx) => {
+    const centerX = Math.max(
+      0,
+      Math.min(waferWidth, Math.round((win.xStart + win.xEnd) / 2))
+    );
+    if (
+      !definedByStepId &&
+      [...baseMarks, ...derivedMarks].some((m) => Math.abs(m.xNm - centerX) <= 1)
+    ) {
+      return;
+    }
+    let label = `AM-${nextIdx}`;
+    while (usedLabels.has(label.toLowerCase())) {
+      nextIdx += 1;
+      label = `AM-${nextIdx}`;
+    }
+    usedLabels.add(label.toLowerCase());
+    nextIdx += 1;
+
+    derivedMarks.push({
+      id: `am_${definedByStepId || 'mask'}_${win.id}_${Date.now()}_${idx}`,
+      label,
+      xNm: centerX,
+      side: markSide,
+      color: palette[(baseMarks.length + derivedMarks.length) % palette.length],
+      ...(definedByStepId ? { definedByStepId } : {}),
+    });
+  });
+
+  return {
+    marks: [...baseMarks, ...derivedMarks],
+    addedCount: derivedMarks.length,
+    derivedCenterXNm: derivedMarks.length === 1 ? derivedMarks[0].xNm : undefined,
   };
 }
 

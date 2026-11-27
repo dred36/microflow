@@ -20,6 +20,7 @@ import {
   subdividePolygonAtBreakpoints,
 } from '../lib/piecewiseZScale';
 import { PiecewiseZPopover } from './PiecewiseZPopover';
+import { copySvgElementToClipboard } from '../lib/batchExportUtils';
 import { SvgPatterns } from './SvgPatterns';
 import { getMaterialById } from '../lib/materials';
 import { ThicknessUnit, formatThickness } from '../lib/units';
@@ -38,6 +39,9 @@ import {
   Lock,
   Unlock,
   ChevronDown,
+  Copy,
+  Check,
+  X,
 } from 'lucide-react';
 
 interface MultiStepFlowViewProps {
@@ -205,6 +209,8 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
   const [showPiecewisePopover, setShowPiecewisePopover] = useState<boolean>(false);
   const piecewiseMenuRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [flowchartCopied, setFlowchartCopied] = useState<'png' | 'svg' | null>(null);
+  const flowchartCopyTimerRef = useRef<number | null>(null);
 
   const hasBookmarkedSteps = useMemo(
     () => flow.steps.some((s) => Boolean(s.bookmarked)),
@@ -1158,6 +1164,29 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
     }
   };
 
+  // Copy full flowchart figure (PNG with SVG fallback) to clipboard
+  const handleCopyFlowchartToClipboard = () => {
+    const svgEl = containerRef.current?.querySelector(
+      '#multi-step-master-svg'
+    ) as SVGSVGElement | null;
+    if (!svgEl) return;
+    const bg = theme === 'paper' ? '#ffffff' : '#060a12';
+    copySvgElementToClipboard(svgEl, masterSvgWidth, masterSvgHeight, bg)
+      .then((kind) => {
+        setFlowchartCopied(kind);
+        if (flowchartCopyTimerRef.current !== null) {
+          window.clearTimeout(flowchartCopyTimerRef.current);
+        }
+        flowchartCopyTimerRef.current = window.setTimeout(() => {
+          setFlowchartCopied(null);
+          flowchartCopyTimerRef.current = null;
+        }, 1800);
+      })
+      .catch((err) => {
+        console.error('Copy flowchart to clipboard failed', err);
+      });
+  };
+
   const trunkStrokeColor = theme === 'paper' ? '#0284c7' : '#38bdf8';
   const branchStrokeColor = theme === 'paper' ? '#7c3aed' : '#a78bfa';
   const rejoinStrokeColor = theme === 'paper' ? '#64748b' : '#94a3b8';
@@ -1178,17 +1207,21 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
           </div>
         </div>
 
-        {/* Flowchart Customization Controls */}
-        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-          {/* Flowchart Orientation / Mode */}
-          <div className="flex items-center gap-0.5 bg-slate-800 p-0.5 rounded-lg border border-slate-700 text-[11px]">
+        {/* Flowchart Controls Grouped by Commonality */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* 1. Layout / Orientation Group */}
+          <div
+            className="inline-flex items-center h-7 bg-slate-800 rounded-lg border border-slate-700 divide-x divide-slate-700/80 overflow-hidden text-[11px] shrink-0"
+            role="group"
+            aria-label="Flowchart Layout"
+          >
             <button
               type="button"
               onClick={() => setFlowMode('vertical')}
-              className={`flex items-center gap-1 px-2 py-1 rounded font-medium transition-colors ${
+              className={`flex items-center gap-1 px-2 h-full font-medium transition-colors ${
                 flowMode === 'vertical'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
               }`}
               title="Top-to-bottom flowchart with side variant branches"
             >
@@ -1198,10 +1231,10 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
             <button
               type="button"
               onClick={() => setFlowMode('horizontal')}
-              className={`flex items-center gap-1 px-2 py-1 rounded font-medium transition-colors ${
+              className={`flex items-center gap-1 px-2 h-full font-medium transition-colors ${
                 flowMode === 'horizontal'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
               }`}
               title="Left-to-right pipeline flowchart with downward variant branches"
             >
@@ -1211,319 +1244,371 @@ export const MultiStepFlowView: React.FC<MultiStepFlowViewProps> = ({
             <button
               type="button"
               onClick={() => setFlowMode('snake-2')}
-              className={`px-2 py-1 rounded font-mono transition-colors ${
+              className={`px-2 h-full font-mono transition-colors ${
                 flowMode === 'snake-2'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
               }`}
               title="Compact 2-column serpentine flowchart"
             >
-              2-Col Flow
+              2-Col
             </button>
             <button
               type="button"
               onClick={() => setFlowMode('snake-3')}
-              className={`px-2 py-1 rounded font-mono transition-colors ${
+              className={`px-2 h-full font-mono transition-colors ${
                 flowMode === 'snake-3'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
               }`}
               title="Compact 3-column serpentine flowchart"
             >
-              3-Col Flow
+              3-Col
             </button>
           </div>
 
-          {/* Variants Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowVariants((v) => !v)}
-            aria-pressed={showVariants}
-            className={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              showVariants
-                ? 'bg-violet-500/20 border-violet-500/55 text-violet-200'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-violet-200'
-            }`}
-            title={
-              variantStepCount > 0
-                ? `${showVariants ? 'Showing' : 'Hiding'} process step variant branches (${variantStepCount} step${variantStepCount > 1 ? 's' : ''} with variants)`
-                : 'Include process variant branches when steps define variants'
-            }
+          {/* 2. Steps & Branch Filtering Group */}
+          <div
+            className="inline-flex items-center h-7 bg-slate-800 rounded-lg border border-slate-700 divide-x divide-slate-700/80 overflow-hidden text-[11px] shrink-0"
+            role="group"
+            aria-label="Step Content Filters"
           >
-            <GitBranch className="w-3.5 h-3.5" />
-            <span>Variants{variantStepCount > 0 ? ` (${variantStepCount})` : ''}</span>
-          </button>
-
-          {/* Substrate Start Frame Toggle */}
-          <button
-            type="button"
-            onClick={() => setIncludeSubstrateFrame(!includeSubstrateFrame)}
-            className={`px-2 sm:px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              includeSubstrateFrame
-                ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Toggle starting substrate node"
-          >
-            Start (a): {includeSubstrateFrame ? 'ON' : 'OFF'}
-          </button>
-
-          {/* Process Block Last Step Only Filter */}
-          <button
-            type="button"
-            disabled={!hasBlocks}
-            onClick={() => setBlockLastStepOnly((prev) => !prev)}
-            aria-pressed={blockLastStepOnly && hasBlocks}
-            className={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              !hasBlocks
-                ? 'bg-slate-800/60 border-slate-700/60 text-slate-500 cursor-not-allowed'
-                : blockLastStepOnly
-                ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-indigo-300'
-            }`}
-            title={
-              !hasBlocks
-                ? 'No process blocks in this flow — group steps into blocks to streamline by block'
-                : blockLastStepOnly
-                ? 'Showing only the last step of each process block'
-                : 'Show only the last step of each process block'
-            }
-          >
-            <Boxes className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Block End Only</span>
-          </button>
-
-          {/* Bookmarked Milestones Filter */}
-          {hasBookmarkedSteps && (
             <button
               type="button"
-              onClick={() => setMilestonesOnly((prev) => !prev)}
-              className={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-                milestonesOnly
-                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-amber-300'
+              onClick={() => setIncludeSubstrateFrame(!includeSubstrateFrame)}
+              aria-pressed={includeSubstrateFrame}
+              className={`px-2 h-full font-medium transition-colors ${
+                includeSubstrateFrame
+                  ? 'bg-emerald-600/20 text-emerald-300'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
               }`}
-              title="Show only bookmarked milestone steps"
+              title="Toggle starting substrate node"
             >
-              <Bookmark className={`w-3 h-3 ${milestonesOnly ? 'fill-amber-400' : ''}`} />
-              <span className="hidden md:inline">Milestones</span>
+              Start (a)
             </button>
-          )}
 
-          {/* Recipe Subtitle Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowToolInfo((v) => !v)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              showToolInfo
-                ? 'bg-sky-600/20 border-sky-500/50 text-sky-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Show or hide recipe parameter subtitles inside flowchart nodes"
+            <button
+              type="button"
+              onClick={() => setShowVariants((v) => !v)}
+              aria-pressed={showVariants}
+              className={`flex items-center gap-1 px-2 h-full font-medium transition-colors ${
+                showVariants
+                  ? 'bg-violet-500/20 text-violet-200'
+                  : 'text-slate-400 hover:text-violet-200 hover:bg-slate-700/50'
+              }`}
+              title={
+                variantStepCount > 0
+                  ? `${showVariants ? 'Showing' : 'Hiding'} process step variant branches (${variantStepCount} step${variantStepCount > 1 ? 's' : ''} with variants)`
+                  : 'Include process variant branches when steps define variants'
+              }
+            >
+              <GitBranch className="w-3.5 h-3.5" />
+              <span>Variants{variantStepCount > 0 ? ` (${variantStepCount})` : ''}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={!hasBlocks}
+              onClick={() => setBlockLastStepOnly((prev) => !prev)}
+              aria-pressed={blockLastStepOnly && hasBlocks}
+              className={`flex items-center gap-1 px-2 h-full font-medium transition-colors ${
+                !hasBlocks
+                  ? 'text-slate-500 cursor-not-allowed opacity-60'
+                  : blockLastStepOnly
+                  ? 'bg-indigo-500/20 text-indigo-300'
+                  : 'text-slate-400 hover:text-indigo-300 hover:bg-slate-700/50'
+              }`}
+              title={
+                !hasBlocks
+                  ? 'No process blocks in this flow — group steps into blocks to streamline by block'
+                  : blockLastStepOnly
+                  ? 'Showing only the last step of each process block'
+                  : 'Show only the last step of each process block'
+              }
+            >
+              <Boxes className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Block End</span>
+            </button>
+
+            {hasBookmarkedSteps && (
+              <button
+                type="button"
+                onClick={() => setMilestonesOnly((prev) => !prev)}
+                aria-pressed={milestonesOnly}
+                className={`flex items-center gap-1 px-2 h-full font-medium transition-colors ${
+                  milestonesOnly
+                    ? 'bg-amber-500/20 text-amber-300'
+                    : 'text-slate-400 hover:text-amber-300 hover:bg-slate-700/50'
+                }`}
+                title="Show only bookmarked milestone steps"
+              >
+                <Bookmark className={`w-3 h-3 ${milestonesOnly ? 'fill-amber-400' : ''}`} />
+                <span className="hidden md:inline">Milestones</span>
+              </button>
+            )}
+          </div>
+
+          {/* 3. Appearance & Annotations Group (Theme, Hatch, Outline, Specs) */}
+          <div
+            className="inline-flex items-center h-7 bg-slate-800 rounded-lg border border-slate-700 divide-x divide-slate-700/80 overflow-hidden text-[11px] shrink-0"
+            role="group"
+            aria-label="Figure Appearance"
           >
-            <FileText className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline">Specs</span>
-          </button>
-
-          {/* Theme Selector */}
-          <div className="flex items-center gap-0.5 bg-slate-800 p-0.5 rounded-lg border border-slate-700 text-[11px]">
             <button
               type="button"
               onClick={() => setTheme('paper')}
-              className={`px-2 py-1 rounded font-medium transition-colors ${
+              className={`px-2 h-full font-medium transition-colors ${
                 theme === 'paper'
-                  ? 'bg-white text-slate-900 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-white text-slate-900'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
               }`}
+              title="Light paper background for publications & slides"
             >
               Paper
             </button>
             <button
               type="button"
               onClick={() => setTheme('dark')}
-              className={`px-2 py-1 rounded font-medium transition-colors ${
+              className={`px-2 h-full font-medium transition-colors ${
                 theme === 'dark'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
               }`}
+              title="Dark cleanroom background"
             >
               Dark
             </button>
-          </div>
-
-          {/* Hatch vs Solid toggle */}
-          <button
-            type="button"
-            onClick={() => setRenderMode((prev) => (prev === 'hatch' ? 'solid' : 'hatch'))}
-            aria-pressed={renderMode === 'hatch'}
-            className={`px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              renderMode === 'hatch'
-                ? 'bg-sky-600/20 border-sky-500/50 text-sky-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Toggle Cleanroom Hatching Patterns"
-          >
-            Hatch
-          </button>
-
-          {/* Z Scaling Controls: Vertical Exaggeration Factor, Shared Y Lock, & Piecewise Z-Map */}
-          <div
-            className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-300"
-            title="Vertical Exaggeration Factor (synced with Cross-Section Canvas)"
-          >
-            <span className="text-[10px] text-slate-400 font-mono">Z:</span>
-            <select
-              value={zAspect1to1 ? 'aspect-1to1' : zScale.toFixed(1)}
-              onChange={(e) => {
-                const rawVal = e.target.value;
-                if (rawVal === 'aspect-1to1') {
-                  setZAspect1to1(true);
-                  return;
-                }
-                setZAspect1to1(false);
-                setZScale(parseFloat(rawVal));
-              }}
-              aria-label="Process figure Z scale factor"
-              className="bg-transparent text-white font-mono text-[11px] focus:outline-none cursor-pointer"
-            >
-              <option value="1.0" className="bg-slate-900">1.0×</option>
-              <option value="1.5" className="bg-slate-900">1.5×</option>
-              <option value="2.0" className="bg-slate-900">2.0× (Fit)</option>
-              <option value="3.5" className="bg-slate-900">3.5×</option>
-              <option value="5.0" className="bg-slate-900">5.0×</option>
-              <option value="aspect-1to1" className="bg-slate-900">
-                {isTrueAspectClamped ? '1:1 (Capped)' : '1:1 (X=Y)'}
-              </option>
-            </select>
-          </div>
-
-          <button
-            type="button"
-            onClick={toggleSharedYScale}
-            aria-pressed={sharedYScale}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              sharedYScale
-                ? 'bg-amber-500/20 border-amber-400/60 text-amber-200'
-                : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
-            }`}
-            title={
-              sharedYScale
-                ? 'Shared Y-Axis Scale Across All Steps (click to fit each step individually)'
-                : 'Fit Each Step Independently (click to lock shared Y-axis scale across all steps)'
-            }
-          >
-            {sharedYScale ? (
-              <Lock className="w-3.5 h-3.5 text-amber-300" />
-            ) : (
-              <Unlock className="w-3.5 h-3.5 text-slate-400" />
-            )}
-            <span className="hidden xl:inline">{sharedYScale ? 'Shared Y' : 'Fit Step'}</span>
-          </button>
-
-          <div ref={piecewiseMenuRef} className="relative shrink-0">
             <button
               type="button"
-              onClick={() => setShowPiecewisePopover((v) => !v)}
-              aria-expanded={showPiecewisePopover}
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-                piecewiseMode !== 'linear'
-                  ? sharedZTransform.isActive || !sharedYScale
-                    ? 'bg-cyan-500/20 border-cyan-400/60 text-cyan-200'
-                    : 'bg-sky-600/20 border-sky-500/40 text-sky-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+              onClick={() => setRenderMode((prev) => (prev === 'hatch' ? 'solid' : 'hatch'))}
+              aria-pressed={renderMode === 'hatch'}
+              className={`flex items-center gap-1 px-2 h-full font-medium transition-colors ${
+                renderMode === 'hatch'
+                  ? 'bg-sky-600/20 text-sky-300'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
               }`}
-              title="Piecewise Z-Axis Scaling for multi-order-of-magnitude layers"
+              title="Toggle Cleanroom Hatching Patterns"
             >
-              <span className="font-mono text-[10px] text-slate-400">Z-Map:</span>
-              <span className="font-mono text-[10px]">
-                {piecewiseMode === 'linear'
-                  ? 'Linear'
-                  : piecewiseMode === 'auto'
-                  ? sharedZTransform.isActive
-                    ? `Auto (${sharedZTransform.bands.length})`
-                    : 'Auto (1)'
-                  : `Custom (${sharedZTransform.bands.length})`}
-              </span>
-              {piecewiseMode === 'linear' && autoPreviewTransform.isActive && (
-                <span
-                  className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"
-                  title={`${autoPreviewTransform.bands.length} Z-scale regimes detected`}
+              <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
+                <rect x="1.2" y="1.2" width="9.6" height="9.6" rx="1.2" />
+                <line x1="1.5" y1="6.5" x2="6.5" y2="1.5" />
+                <line x1="1.5" y1="10.5" x2="10.5" y2="1.5" />
+                <line x1="5.5" y1="10.5" x2="10.5" y2="5.5" />
+              </svg>
+              <span className="hidden lg:inline">Hatch</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowOutlines((prev) => !prev)}
+              aria-pressed={showOutlines}
+              className={`flex items-center gap-1 px-2 h-full font-medium transition-colors ${
+                showOutlines
+                  ? 'bg-sky-600/20 text-sky-300'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+              }`}
+              title={showOutlines ? 'Hide Shape Outlines' : 'Show Shape Outlines'}
+            >
+              <Square className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline">Outline</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowToolInfo((v) => !v)}
+              aria-pressed={showToolInfo}
+              className={`flex items-center gap-1 px-2 h-full font-medium transition-colors ${
+                showToolInfo
+                  ? 'bg-sky-600/20 text-sky-300'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+              }`}
+              title="Show or hide recipe parameter subtitles inside flowchart nodes"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline">Specs</span>
+            </button>
+          </div>
+
+          {/* 4. Scale & Z-Axis Group */}
+          <div
+            className="inline-flex items-center h-7 bg-slate-800 rounded-lg border border-slate-700 divide-x divide-slate-700/80 text-[11px] shrink-0"
+            role="group"
+            aria-label="Z-Axis Scaling"
+          >
+            <div
+              className="flex items-center gap-1 px-2 h-full text-slate-300"
+              title="Vertical Exaggeration Factor (synced with Cross-Section Canvas)"
+            >
+              <span className="text-[10px] text-slate-400 font-mono">Z:</span>
+              <select
+                value={zAspect1to1 ? 'aspect-1to1' : zScale.toFixed(1)}
+                onChange={(e) => {
+                  const rawVal = e.target.value;
+                  if (rawVal === 'aspect-1to1') {
+                    setZAspect1to1(true);
+                    return;
+                  }
+                  setZAspect1to1(false);
+                  setZScale(parseFloat(rawVal));
+                }}
+                aria-label="Process figure Z scale factor"
+                className="bg-transparent text-white font-mono text-[11px] focus:outline-none cursor-pointer"
+              >
+                <option value="1.0" className="bg-slate-900">1.0×</option>
+                <option value="1.5" className="bg-slate-900">1.5×</option>
+                <option value="2.0" className="bg-slate-900">2.0× (Fit)</option>
+                <option value="3.5" className="bg-slate-900">3.5×</option>
+                <option value="5.0" className="bg-slate-900">5.0×</option>
+                <option value="aspect-1to1" className="bg-slate-900">
+                  {isTrueAspectClamped ? '1:1 (Capped)' : '1:1 (X=Y)'}
+                </option>
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={toggleSharedYScale}
+              aria-pressed={sharedYScale}
+              className={`flex items-center gap-1 px-2 h-full font-medium transition-colors ${
+                sharedYScale
+                  ? 'bg-amber-500/20 text-amber-200'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              }`}
+              title={
+                sharedYScale
+                  ? 'Shared Y-Axis Scale Across All Steps (click to fit each step individually)'
+                  : 'Fit Each Step Independently (click to lock shared Y-axis scale across all steps)'
+              }
+            >
+              {sharedYScale ? (
+                <Lock className="w-3.5 h-3.5 text-amber-300" />
+              ) : (
+                <Unlock className="w-3.5 h-3.5 text-slate-400" />
+              )}
+              <span className="hidden xl:inline">{sharedYScale ? 'Shared Y' : 'Fit Step'}</span>
+            </button>
+
+            <div ref={piecewiseMenuRef} className="relative h-full">
+              <button
+                type="button"
+                onClick={() => setShowPiecewisePopover((v) => !v)}
+                aria-expanded={showPiecewisePopover}
+                className={`flex items-center gap-1 px-2 h-full rounded-r-[7px] font-medium transition-colors ${
+                  piecewiseMode !== 'linear'
+                    ? sharedZTransform.isActive || !sharedYScale
+                      ? 'bg-cyan-500/20 text-cyan-200'
+                      : 'bg-sky-600/20 text-sky-300'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+                }`}
+                title="Piecewise Z-Axis Scaling for multi-order-of-magnitude layers"
+              >
+                <span className="font-mono text-[10px] text-slate-400">Z-Map:</span>
+                <span className="font-mono text-[10px]">
+                  {piecewiseMode === 'linear'
+                    ? 'Linear'
+                    : piecewiseMode === 'auto'
+                    ? sharedZTransform.isActive
+                      ? `Auto (${sharedZTransform.bands.length})`
+                      : 'Auto (1)'
+                    : `Custom (${sharedZTransform.bands.length})`}
+                </span>
+                {piecewiseMode === 'linear' && autoPreviewTransform.isActive && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"
+                    title={`${autoPreviewTransform.bands.length} Z-scale regimes detected`}
+                  />
+                )}
+                <ChevronDown className="w-3 h-3 opacity-70" />
+              </button>
+
+              {showPiecewisePopover && (
+                <PiecewiseZPopover
+                  mode={piecewiseMode}
+                  onChangeMode={handleChangePiecewiseMode}
+                  autoCompression={autoCompression}
+                  onChangeAutoCompression={setAutoCompression}
+                  customConfig={customZConfig}
+                  onChangeCustomConfig={setCustomZConfig}
+                  zTransform={sharedZTransform}
+                  autoPreviewTransform={autoPreviewTransform}
+                  thicknessUnit={thicknessUnit}
+                  onSeedCustomFromAuto={handleSeedCustomFromAuto}
+                  onClose={() => setShowPiecewisePopover(false)}
                 />
               )}
-              <ChevronDown className="w-3 h-3 opacity-70" />
+            </div>
+          </div>
+
+          {/* 5. Export & Clipboard Group */}
+          <div
+            className="inline-flex items-center h-7 bg-slate-800 rounded-lg border border-slate-700 divide-x divide-slate-700/80 overflow-hidden text-[11px] shrink-0"
+            role="group"
+            aria-label="Export Figure"
+          >
+            <button
+              type="button"
+              onClick={handleCopyFlowchartToClipboard}
+              className={`flex items-center gap-1 px-2.5 h-full font-medium transition-colors ${
+                flowchartCopied
+                  ? 'bg-emerald-500/20 text-emerald-300'
+                  : 'text-slate-200 hover:bg-slate-700/60'
+              }`}
+              title={
+                flowchartCopied === 'png'
+                  ? 'Copied Flowchart Image to Clipboard!'
+                  : flowchartCopied === 'svg'
+                  ? 'Copied Flowchart SVG to Clipboard!'
+                  : 'Copy Flowchart Image to Clipboard'
+              }
+            >
+              {flowchartCopied ? (
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <Copy className="w-3.5 h-3.5 text-slate-300" />
+              )}
+              <span>{flowchartCopied ? 'Copied' : 'Copy'}</span>
             </button>
 
-            {showPiecewisePopover && (
-              <PiecewiseZPopover
-                mode={piecewiseMode}
-                onChangeMode={handleChangePiecewiseMode}
-                autoCompression={autoCompression}
-                onChangeAutoCompression={setAutoCompression}
-                customConfig={customZConfig}
-                onChangeCustomConfig={setCustomZConfig}
-                zTransform={sharedZTransform}
-                autoPreviewTransform={autoPreviewTransform}
-                thicknessUnit={thicknessUnit}
-                onSeedCustomFromAuto={handleSeedCustomFromAuto}
-                onClose={() => setShowPiecewisePopover(false)}
-              />
+            <button
+              type="button"
+              onClick={handleExportSvg}
+              className="flex items-center gap-1 px-2.5 h-full hover:bg-slate-700/60 text-slate-200 font-medium transition-colors"
+              title="Download Flowchart as SVG Vector"
+            >
+              <FileDown className="w-3.5 h-3.5 text-sky-400" />
+              <span>SVG</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExportPng}
+              disabled={isExporting}
+              className="flex items-center gap-1 px-2.5 h-full bg-sky-600 hover:bg-sky-500 text-white font-semibold transition-colors disabled:opacity-60"
+              title="Download High-Resolution Flowchart PNG"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{isExporting ? 'Exporting...' : 'PNG'}</span>
+            </button>
+
+            {onOpenBatchExport && (
+              <button
+                type="button"
+                onClick={onOpenBatchExport}
+                className="flex items-center gap-1 px-2.5 h-full hover:bg-slate-700/60 text-sky-300 hover:text-sky-200 font-medium transition-colors"
+                title="Batch export all cross-section steps as individual SVG or PNG files"
+              >
+                <Files className="w-3.5 h-3.5 text-sky-400" />
+                <span className="hidden sm:inline">Batch</span>
+              </button>
             )}
           </div>
 
-          {/* Shape Outline toggle */}
-          <button
-            type="button"
-            onClick={() => setShowOutlines((prev) => !prev)}
-            aria-pressed={showOutlines}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              showOutlines
-                ? 'bg-sky-600/20 border-sky-500/50 text-sky-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-            title={showOutlines ? 'Hide Shape Outlines' : 'Show Shape Outlines'}
-          >
-            <Square className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline">Outline</span>
-          </button>
-
-          {/* Export Buttons */}
-          <button
-            type="button"
-            onClick={handleExportSvg}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-medium transition-colors"
-          >
-            <FileDown className="w-3.5 h-3.5 text-sky-400" />
-            <span>SVG</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleExportPng}
-            disabled={isExporting}
-            className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-semibold shadow-md transition-colors"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>{isExporting ? 'Exporting...' : 'PNG'}</span>
-          </button>
-
-          {onOpenBatchExport && (
-            <button
-              type="button"
-              onClick={onOpenBatchExport}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sky-300 hover:text-sky-200 text-[11px] font-medium transition-colors"
-              title="Batch export all cross-section steps as individual SVG or PNG files"
-            >
-              <Files className="w-3.5 h-3.5 text-sky-400" />
-              <span className="hidden sm:inline">Batch Steps</span>
-            </button>
-          )}
-
+          {/* Close Modal */}
           <button
             type="button"
             onClick={onClose}
-            className="px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition-colors"
+            className="flex items-center gap-1 h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-[11px] font-medium transition-colors shrink-0"
           >
-            Close
+            <X className="w-3.5 h-3.5" />
+            <span>Close</span>
           </button>
         </div>
       </div>

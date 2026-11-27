@@ -57,6 +57,17 @@ export interface MaskWindow {
   xStart: number; // in nm
   xEnd: number;   // in nm
   fixedWidth?: boolean;
+  isAlignKey?: boolean; // Flags this window/blocker shape as an alignment key feature
+  paramBindings?: Record<string, string>;
+}
+
+export interface GlobalAlignmentMark {
+  id: string;
+  label: string; // e.g. "AM-1", "Left Key"
+  xNm: number;   // Global X position on substrate in nm (0..substrateWidth)
+  side?: ProcessSide; // Substrate face where fiducial mark is located (default 'front')
+  color?: string; // Optional accent color
+  definedByStepId?: string; // Optional lithography step ID that patterns this mark
   paramBindings?: Record<string, string>;
 }
 
@@ -114,6 +125,7 @@ export interface LithographyConfig {
   maskName?: string;
   maskId?: string; // Linked PhotomaskLevel id
   maskColor?: string; // Reticle accent color
+  definesAlignmentMarks?: boolean; // Marks this photolithography step as patterning alignment fiducials
 }
 
 export interface PhotomaskLevel {
@@ -128,6 +140,7 @@ export interface PhotomaskLevel {
   windows: MaskWindow[];
   assignedStepId?: string; // ID of assigned photolithography step
   assignedVariantId?: string; // Optional ID of assigned variant when the step is branched
+  definesAlignmentMarks?: boolean; // Flags this photomask level as defining alignment key features
 }
 
 export interface EtchConfig {
@@ -262,6 +275,7 @@ export interface MountedTapeFrame {
 }
 
 export interface ToolRecipe {
+  toolId?: string;
   toolName: string;
   gases: string;
   power: string;
@@ -270,6 +284,28 @@ export interface ToolRecipe {
   duration: string;
   targetRate?: string;
   inspectionNotes?: string;
+}
+
+export interface ToolCapabilityLink {
+  mechanism: ProcessStepType;
+  /**
+   * Supported sub-mechanisms for this mechanism (e.g. 'PECVD', 'rie', 'drie-bosch',
+   * 'UV Contact (365nm)', 'fusion', 'blade'). Empty/omitted matches all sub-mechanisms.
+   */
+  subMechanisms?: string[];
+}
+
+export interface CleanroomTool {
+  id: string;
+  name: string;
+  vendor?: string;
+  category: string;
+  bayLocation?: string;
+  waferSize?: string;
+  capabilities: ToolCapabilityLink[];
+  defaultRecipe: Partial<ToolRecipe>;
+  notes?: string;
+  isCustom?: boolean;
 }
 
 export interface ProcessBlock {
@@ -419,9 +455,11 @@ export interface ProcessFlow {
   steps: ProcessStep[];
   materials: Material[];
   masks?: PhotomaskLevel[]; // Central mask set library
+  alignmentMarks?: GlobalAlignmentMark[]; // Global substrate alignment fiducial marks
   blocks?: ProcessBlock[]; // Fabrication blocks / modules hierarchy
   gdsLayout?: GdsLayoutData; // Optional 2D GDS-style layout & section cut line
   etchLibrary?: EtchRecipe[]; // Custom & saved etch rate recipes
+  toolLibrary?: CleanroomTool[]; // Custom & saved cleanroom tools linked to mechanisms
   variables?: DesignVariable[]; // Parametric design variables
   paramBindings?: Record<string, string>; // Flow-level parameter bindings (e.g. substrateWidth)
 }

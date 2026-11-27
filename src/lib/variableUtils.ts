@@ -881,6 +881,7 @@ export function resolveFlowParameters(flow: ProcessFlow): ProcessFlow {
           )
       ) ||
       Boolean(flow.masks?.some((m) => m.windows.some((w) => w.paramBindings && Object.keys(w.paramBindings).length > 0))) ||
+      Boolean(flow.alignmentMarks?.some((am) => am.paramBindings && Object.keys(am.paramBindings).length > 0)) ||
       Boolean(flow.gdsLayout?.shapes.some((sh) => sh.paramBindings && Object.keys(sh.paramBindings).length > 0));
     if (!anyBound) return flow;
   }
@@ -1170,6 +1171,16 @@ export function resolveFlowParameters(flow: ProcessFlow): ProcessFlow {
     windows: mask.windows.map((w) => resolveMaskWindow(w, scope, nextSubstrateWidth)),
   }));
 
+  // Update global alignment marks
+  const nextAlignmentMarks = flow.alignmentMarks?.map((am) => {
+    const x = evalBoundValue(am.paramBindings, 'xNm', scope);
+    if (x === null) return am;
+    return {
+      ...am,
+      xNm: Math.max(0, Math.min(nextSubstrateWidth, Math.round(x))),
+    };
+  });
+
   // Update GDS shapes & section lines
   const nextGdsLayout = flow.gdsLayout
     ? {
@@ -1190,6 +1201,7 @@ export function resolveFlowParameters(flow: ProcessFlow): ProcessFlow {
     substrateThickness: nextSubstrateThickness,
     steps: nextSteps,
     ...(nextMasks ? { masks: nextMasks } : {}),
+    ...(nextAlignmentMarks ? { alignmentMarks: nextAlignmentMarks } : {}),
     ...(nextGdsLayout ? { gdsLayout: nextGdsLayout } : {}),
   };
 }
@@ -1270,6 +1282,10 @@ export function countVariableUsages(flow: ProcessFlow): Record<string, VariableU
         scanBindings(w.paramBindings, `Mask ${mask.name} · Window #${wIdx + 1}`);
       });
     }
+  });
+
+  flow.alignmentMarks?.forEach((am) => {
+    scanBindings(am.paramBindings, `Alignment Mark ${am.label}`);
   });
 
   flow.gdsLayout?.shapes.forEach((shape, idx) => {
@@ -1385,6 +1401,10 @@ export function renameVariableInFlow(
         paramBindings: rewriteMap(w.paramBindings),
       })),
     })),
+    alignmentMarks: flow.alignmentMarks?.map((am) => ({
+      ...am,
+      paramBindings: rewriteMap(am.paramBindings),
+    })),
     gdsLayout: flow.gdsLayout
       ? {
           ...flow.gdsLayout,
@@ -1499,6 +1519,10 @@ export function removeVariableFromFlow(flow: ProcessFlow, varName: string): Proc
         ...w,
         paramBindings: cleanMap(w.paramBindings),
       })),
+    })),
+    alignmentMarks: flow.alignmentMarks?.map((am) => ({
+      ...am,
+      paramBindings: cleanMap(am.paramBindings),
     })),
     gdsLayout: flow.gdsLayout
       ? {

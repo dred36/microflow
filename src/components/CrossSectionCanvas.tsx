@@ -6,11 +6,15 @@
 import React, { useRef, useState, useMemo, useCallback, useEffect, useLayoutEffect } from 'react';
 import {
   ProcessFlow,
+  ProcessStep,
+  ProcessStepType,
   ProcessSide,
   Material,
   CrossSectionMesh,
   RenderedPolygon,
   SacrificialReleaseRegion,
+  GlobalAlignmentMark,
+  LithographyConfig,
 } from '../types/microfab';
 import { doesSegmentMatchReleaseSide } from '../lib/simulationEngine';
 import { SvgPatterns } from './SvgPatterns';
@@ -29,6 +33,7 @@ import {
   formatLocalGain,
 } from '../lib/piecewiseZScale';
 import { PiecewiseZPopover } from './PiecewiseZPopover';
+import { copySvgElementToClipboard } from '../lib/batchExportUtils';
 import {
   ZoomIn,
   ZoomOut,
@@ -46,6 +51,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   X,
   Square,
   Axis3d,
@@ -61,6 +67,8 @@ import {
   Lock,
   Unlock,
   HelpCircle,
+  FileText,
+  Scan,
 } from 'lucide-react';
 
 interface StackProbePoint {
@@ -99,6 +107,12 @@ interface CrossSectionCanvasProps {
   totalSteps?: number;
   activeStepTitle?: string;
   activeStepSide?: ProcessSide;
+  activeStepType?: ProcessStepType;
+  activeStepNotes?: string;
+  activeLithography?: LithographyConfig;
+  alignmentMarks?: GlobalAlignmentMark[];
+  substrateTopY?: number;
+  steps?: ProcessStep[];
   finalMesh?: CrossSectionMesh | null;
   finalPolygons?: RenderedPolygon[];
   finalStepNumber?: number;
@@ -162,6 +176,12 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   totalSteps,
   activeStepTitle,
   activeStepSide,
+  activeStepType,
+  activeStepNotes,
+  activeLithography,
+  alignmentMarks = [],
+  substrateTopY,
+  steps,
   finalMesh,
   finalPolygons,
   finalStepNumber,
@@ -312,8 +332,12 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   // Display toggles
   const [showOutlines, setShowOutlines] = useState<boolean>(true);
   const [showAxesAndLabels, setShowAxesAndLabels] = useState<boolean>(true);
+  const [showMaskOverlay, setShowMaskOverlay] = useState<boolean>(true);
+  const [showAlignmentOverlay, setShowAlignmentOverlay] = useState<boolean>(true);
   const [renderMode, setRenderMode] = useState<'hatch' | 'solid'>('hatch');
   const [showLegend, setShowLegend] = useState<boolean>(true);
+  const [showNotes, setShowNotes] = useState<boolean>(true);
+  const [notesMinimized, setNotesMinimized] = useState<boolean>(false);
   const [insetExpanded, setInsetExpanded] = useState<boolean>(false);
   const [stackProbeMode, setStackProbeMode] = useState<boolean>(false);
   const [releaseDragSelection, setReleaseDragSelection] = useState<{
@@ -327,6 +351,8 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
   const [manualProbeXUm, setManualProbeXUm] = useState<string>('');
   const [stackCopied, setStackCopied] = useState<boolean>(false);
   const stackCopyTimerRef = useRef<number | null>(null);
+  const [canvasCopied, setCanvasCopied] = useState<'png' | 'svg' | null>(null);
+  const canvasCopyTimerRef = useRef<number | null>(null);
   const insetRef = useRef<HTMLDivElement>(null);
   const [insetPos, setInsetPos] = useState<{ x: number; y: number } | null>(null);
   const [insetDrag, setInsetDrag] = useState<{
@@ -349,6 +375,35 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     }
     return list;
   }, [polygons, materials]);
+
+  const stepById = useMemo(() => {
+    const map = new Map<
+      string,
+      { stepNumber: number; title: string; type: string; notes?: string }
+    >();
+    if (steps) {
+      steps.forEach((s, idx) => {
+        map.set(s.id, {
+          stepNumber: idx + 1,
+          title: s.title,
+          type: s.type,
+          notes: s.notes,
+        });
+      });
+    } else if (mesh.stepSummaries) {
+      mesh.stepSummaries.forEach((s) => {
+        map.set(s.stepId, {
+          stepNumber: s.stepIndex + 1,
+          title: s.title,
+          type: '',
+        });
+      });
+    }
+    return map;
+  }, [steps, mesh.stepSummaries]);
+
+  const trimmedActiveNotes = activeStepNotes?.trim() || '';
+  const hasActiveNotes = trimmedActiveNotes.length > 0;
 
   // Locked projection baseline when user manually zooms or pans so step changes,
   // MaskEditor mounting/unmounting, and sidebar toggles never rescale or shift features.
@@ -1830,6 +1885,26 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  // Copy active cross-section canvas image (PNG with SVG fallback) to clipboard
+  const handleCopyCanvasToClipboard = () => {
+    const svgEl = svgRef.current || containerRef.current?.querySelector('svg');
+    if (!svgEl) return;
+    copySvgElementToClipboard(svgEl as SVGSVGElement, svgWidth, svgHeight, '#060a12')
+      .then((kind) => {
+        setCanvasCopied(kind);
+        if (canvasCopyTimerRef.current !== null) {
+          window.clearTimeout(canvasCopyTimerRef.current);
+        }
+        canvasCopyTimerRef.current = window.setTimeout(() => {
+          setCanvasCopied(null);
+          canvasCopyTimerRef.current = null;
+        }, 1800);
+      })
+      .catch((err) => {
+        console.error('Copy cross-section to clipboard failed', err);
+      });
+  };
+
   return (
     <div
       ref={cardRef}
@@ -1839,286 +1914,390 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
           : 'relative flex flex-col h-full bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl select-none'
       }
     >
-      {/* Top CAD Control Bar - Responsive layout */}
-      <div className="relative z-30 flex flex-wrap items-center justify-between px-2.5 sm:px-3 py-1.5 sm:py-2 bg-slate-900 border-b border-slate-800 text-xs gap-1.5 sm:gap-2 min-w-0">
-        {/* Left: Status & Active Step Title */}
-        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 truncate">
-          <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-emerald-400 shrink-0 animate-pulse" />
-          <span className="font-semibold text-slate-200 truncate text-xs hidden sm:inline">
-            {title || 'Wafer Cross-Section'}
-          </span>
+      {/* Top CAD Control Bar - Pinned top-left stepper, wrapping title & compact controls */}
+      <div className="relative z-30 flex items-start gap-1.5 px-2 py-1 bg-slate-900 border-b border-slate-800 text-xs min-w-0">
+        {/* Pinned Top-Left: Status & Fixed-Width Step Stepper (never shifts position) */}
+        <div className="flex items-center gap-1.5 h-6 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0 animate-pulse" />
           {stepNumber !== undefined && (
-            <div className="flex items-center bg-slate-800 rounded border border-slate-700/80 shrink-0 overflow-hidden">
+            <div className="flex items-center h-6 bg-slate-800 rounded border border-slate-700/80 shrink-0 overflow-hidden">
               {onPrevStep && (
                 <button
                   type="button"
                   onClick={onPrevStep}
                   disabled={!canPrevStep}
-                  className="p-0.5 text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  className="px-0.5 h-full text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:pointer-events-none transition-colors"
                   title="Previous Step"
+                  aria-label="Previous Step"
                 >
-                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <ChevronLeft className="w-3 h-3" />
                 </button>
               )}
-              <span className="text-slate-300 font-mono text-[11px] px-1.5 py-0.5">
-                {stepNumber === 0 ? 'Substrate' : `Step ${stepNumber}/${totalSteps}`}
+              <span className="text-slate-300 font-mono text-[10px] w-11 px-1 text-center tabular-nums whitespace-nowrap">
+                {stepNumber === 0 ? 'Sub' : `${stepNumber}/${totalSteps}`}
               </span>
               {onNextStep && (
                 <button
                   type="button"
                   onClick={onNextStep}
                   disabled={!canNextStep}
-                  className="p-0.5 text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  className="px-0.5 h-full text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:pointer-events-none transition-colors"
                   title="Next Step"
+                  aria-label="Next Step"
                 >
-                  <ChevronRight className="w-3.5 h-3.5" />
+                  <ChevronRight className="w-3 h-3" />
                 </button>
               )}
             </div>
           )}
-          {activeStepTitle && (
-            <span className="text-sky-400 font-medium truncate text-[11px] sm:hidden xl:inline">
-              · {activeStepTitle}
-            </span>
-          )}
-          {activeStepSide === 'back' && (
-            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-semibold shrink-0">
-              Back (-Z)
-            </span>
-          )}
-          {activeStepSide === 'both' && (
-            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[10px] font-semibold shrink-0">
-              ±Z
-            </span>
-          )}
         </div>
 
-        {/* Right: Viewport Controls */}
-        <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 shrink-0 ml-auto">
-          {/* Vertical Z-Scale Selector */}
-          <div
-            className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 shrink-0"
-            title="Vertical Exaggeration Factor"
-          >
-            <span className="text-[10px] text-slate-400 font-mono">Z:</span>
-            <select
-              value={zAspect1to1 ? 'aspect-1to1' : zScale.toFixed(1)}
-              onChange={(e) => {
-                const rawVal = e.target.value;
-                if (rawVal === 'aspect-1to1') {
-                  const nextEffZ =
-                    baseScaleY > 0
-                      ? Math.max(0.05, Math.min(250, scaleX / baseScaleY))
-                      : effectiveZScale;
+        {/* Right Region: Step Title (truncates smoothly) + Compact Grouped Viewport Controls */}
+        <div className="flex flex-wrap items-center justify-end gap-1 flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1 h-6 overflow-hidden">
+            {activeStepTitle && (
+              <span className="text-sky-400 font-medium truncate text-[11px]">
+                {activeStepTitle}
+              </span>
+            )}
+            {title && (
+              <span className="font-semibold text-slate-400 truncate text-[10px] hidden xl:inline max-w-[140px]">
+                · {title}
+              </span>
+            )}
+            {activeStepSide === 'back' && (
+              <span className="px-1 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono text-[9px] font-semibold shrink-0">
+                -Z
+              </span>
+            )}
+            {activeStepSide === 'both' && (
+              <span className="px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[9px] font-semibold shrink-0">
+                ±Z
+              </span>
+            )}
+          </div>
+
+          {/* Scale Group: Z-Scale, Lock Y, Piecewise Z-Map */}
+          <div className="inline-flex items-center h-6 rounded-md border border-slate-700 bg-slate-800 divide-x divide-slate-700/80 shrink-0">
+            <div
+              className="flex items-center gap-0.5 px-1 h-full text-slate-300"
+              title="Vertical Exaggeration Factor"
+            >
+              <span className="text-[9px] text-slate-400 font-mono">Z</span>
+              <select
+                value={zAspect1to1 ? 'aspect-1to1' : zScale.toFixed(1)}
+                onChange={(e) => {
+                  const rawVal = e.target.value;
+                  if (rawVal === 'aspect-1to1') {
+                    const nextEffZ =
+                      baseScaleY > 0
+                        ? Math.max(0.05, Math.min(250, scaleX / baseScaleY))
+                        : effectiveZScale;
+                    if (lockedMetrics !== null && effectiveZScale > 0) {
+                      const uyOld = (svgHeight / 2 - pan.y) / zoom;
+                      const uyNew =
+                        effectiveDatumScreenY -
+                        (effectiveDatumScreenY - uyOld) * (nextEffZ / effectiveZScale);
+                      setPan((p) => ({
+                        ...p,
+                        y: svgHeight / 2 - uyNew * zoom,
+                      }));
+                    }
+                    setZAspect1to1(true);
+                    return;
+                  }
+                  const nextZ = parseFloat(rawVal);
                   if (lockedMetrics !== null && effectiveZScale > 0) {
                     const uyOld = (svgHeight / 2 - pan.y) / zoom;
                     const uyNew =
                       effectiveDatumScreenY -
-                      (effectiveDatumScreenY - uyOld) * (nextEffZ / effectiveZScale);
+                      (effectiveDatumScreenY - uyOld) * (nextZ / effectiveZScale);
                     setPan((p) => ({
                       ...p,
                       y: svgHeight / 2 - uyNew * zoom,
                     }));
                   }
-                  setZAspect1to1(true);
-                  return;
+                  setZAspect1to1(false);
+                  setZScale(nextZ);
+                }}
+                aria-label="Vertical Exaggeration Factor"
+                className="bg-transparent text-white font-mono text-[10px] focus:outline-none cursor-pointer"
+              >
+                <option value="1.0" className="bg-slate-900">1.0x</option>
+                <option value="1.5" className="bg-slate-900">1.5x</option>
+                <option value="2.0" className="bg-slate-900">2.0x</option>
+                <option value="3.5" className="bg-slate-900">3.5x</option>
+                <option value="5.0" className="bg-slate-900">5.0x</option>
+                <option value="aspect-1to1" className="bg-slate-900">1:1</option>
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (onToggleLockSharedYScale) {
+                  onToggleLockSharedYScale();
+                } else {
+                  setInternalLockSharedYScale((prev) => !prev);
                 }
-                const nextZ = parseFloat(rawVal);
-                if (lockedMetrics !== null && effectiveZScale > 0) {
-                  const uyOld = (svgHeight / 2 - pan.y) / zoom;
-                  const uyNew =
-                    effectiveDatumScreenY -
-                    (effectiveDatumScreenY - uyOld) * (nextZ / effectiveZScale);
-                  setPan((p) => ({
-                    ...p,
-                    y: svgHeight / 2 - uyNew * zoom,
-                  }));
-                }
-                setZAspect1to1(false);
-                setZScale(nextZ);
+                setLockedMetrics(null);
               }}
-              className="bg-transparent text-white font-mono text-[11px] focus:outline-none cursor-pointer"
-            >
-              <option value="1.0" className="bg-slate-900">1.0x</option>
-              <option value="1.5" className="bg-slate-900">1.5x</option>
-              <option value="2.0" className="bg-slate-900">2.0x</option>
-              <option value="3.5" className="bg-slate-900">3.5x</option>
-              <option value="5.0" className="bg-slate-900">5.0x</option>
-              <option value="aspect-1to1" className="bg-slate-900">1:1 (X=Y)</option>
-            </select>
-          </div>
-
-          {/* Lock Shared Y-Axis Scale Across All Steps */}
-          <button
-            type="button"
-            onClick={() => {
-              if (onToggleLockSharedYScale) {
-                onToggleLockSharedYScale();
-              } else {
-                setInternalLockSharedYScale((prev) => !prev);
-              }
-              setLockedMetrics(null);
-            }}
-            aria-pressed={lockSharedYScale}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors shrink-0 ${
-              lockSharedYScale
-                ? 'bg-amber-500/20 border-amber-400/60 text-amber-200 shadow-sm'
-                : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
-            }`}
-            title={
-              lockSharedYScale
-                ? 'Y-Axis Scale Locked Across All Steps (click to fit each step individually)'
-                : 'Lock Y-Axis Scale Across All Process Steps for 1:1 Thickness Comparison'
-            }
-          >
-            {lockSharedYScale ? (
-              <Lock className="w-3.5 h-3.5 text-amber-300" />
-            ) : (
-              <Unlock className="w-3.5 h-3.5 text-slate-400" />
-            )}
-            <span className="hidden md:inline">Lock Y</span>
-          </button>
-
-          {/* Piecewise Z-Axis Scaling Selector */}
-          <div ref={piecewiseMenuRef} className="relative shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowPiecewisePopover((v) => !v)}
-              aria-expanded={showPiecewisePopover}
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-                piecewiseMode !== 'linear'
-                  ? zTransform.isActive
-                    ? 'bg-cyan-500/20 border-cyan-400/60 text-cyan-200'
-                    : 'bg-sky-600/20 border-sky-500/40 text-sky-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
-              }`}
-              title="Piecewise Z-Axis Scaling for multi-order-of-magnitude layers"
-            >
-              <span className="font-mono text-[10px] text-slate-400">Z-Map:</span>
-              <span className="font-mono text-[10px]">
-                {piecewiseMode === 'linear'
-                  ? 'Linear'
-                  : piecewiseMode === 'auto'
-                  ? zTransform.isActive
-                    ? `Auto (${zTransform.bands.length})`
-                    : 'Auto (1)'
-                  : `Custom (${zTransform.bands.length})`}
-              </span>
-              {piecewiseMode === 'linear' && autoPreviewTransform.isActive && (
-                <span
-                  className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"
-                  title={`${autoPreviewTransform.bands.length} Z-scale regimes detected`}
-                />
-              )}
-              <ChevronDown className="w-3 h-3 opacity-70" />
-            </button>
-
-            {showPiecewisePopover && (
-              <PiecewiseZPopover
-                mode={piecewiseMode}
-                onChangeMode={handleChangePiecewiseMode}
-                autoCompression={autoCompression}
-                onChangeAutoCompression={setAutoCompression}
-                customConfig={customZConfig}
-                onChangeCustomConfig={setCustomZConfig}
-                zTransform={zTransform}
-                autoPreviewTransform={autoPreviewTransform}
-                thicknessUnit={thicknessUnit}
-                onSeedCustomFromAuto={handleSeedCustomFromAuto}
-                onClose={() => setShowPiecewisePopover(false)}
-              />
-            )}
-          </div>
-
-          {/* Hatch vs Solid toggle */}
-          <button
-            onClick={() => setRenderMode(renderMode === 'hatch' ? 'solid' : 'hatch')}
-            className={`px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors hidden sm:inline-flex ${
-              renderMode === 'hatch'
-                ? 'bg-sky-600/20 border-sky-500/50 text-sky-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Toggle Cleanroom Hatching Patterns"
-          >
-            Hatch
-          </button>
-
-          {/* Shape Outline Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowOutlines((v) => !v)}
-            aria-pressed={showOutlines}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              showOutlines
-                ? 'bg-sky-600/20 border-sky-500/50 text-sky-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-            title={showOutlines ? 'Hide Shape Outlines' : 'Show Shape Outlines'}
-          >
-            <Square className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Outline</span>
-          </button>
-
-          {/* Graph Axes, Grid & Labels Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowAxesAndLabels((v) => !v)}
-            aria-pressed={showAxesAndLabels}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              showAxesAndLabels
-                ? 'bg-sky-600/20 border-sky-500/50 text-sky-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-            title={
-              showAxesAndLabels
-                ? 'Hide Graph Axes, Grid & Labels'
-                : 'Show Graph Axes, Grid & Labels'
-            }
-          >
-            <Axis3d className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Axes</span>
-          </button>
-
-          {/* Material Legend Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowLegend((v) => !v)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              showLegend
-                ? 'bg-sky-600/20 border-sky-500/50 text-sky-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-            title={showLegend ? 'Hide Material Legend' : 'Show Material Legend'}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Legend</span>
-          </button>
-
-          {/* Step Inset Preview Toggle */}
-          {onToggleFinalInset && (canShowInsetButton ?? finalStepNumber !== undefined) && (
-            <button
-              type="button"
-              onClick={onToggleFinalInset}
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-                showFinalInset
-                  ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+              aria-pressed={lockSharedYScale}
+              className={`flex items-center gap-0.5 px-1.5 h-full text-[10px] font-medium transition-colors ${
+                lockSharedYScale
+                  ? 'bg-amber-500/20 text-amber-200'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
               }`}
               title={
-                insetStepOptions && insetStepOptions.length === 0
-                  ? 'Inset preview (active when viewing an earlier step)'
-                  : showFinalInset
-                  ? 'Hide step inset preview'
-                  : 'Show inset preview of a later process step'
+                lockSharedYScale
+                  ? 'Y-Axis Scale Locked Across All Steps (click to fit each step individually)'
+                  : 'Lock Y-Axis Scale Across All Process Steps for 1:1 Thickness Comparison'
               }
+              aria-label="Lock Y-Axis Scale Across All Steps"
             >
-              <PictureInPicture2 className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Inset</span>
+              {lockSharedYScale ? (
+                <Lock className="w-3 h-3 text-amber-300" />
+              ) : (
+                <Unlock className="w-3 h-3 text-slate-400" />
+              )}
+              <span className="font-mono text-[9px]">Y</span>
             </button>
-          )}
 
-          {/* Caliper Measurement tool & Geometry Snap */}
-          <div className="flex items-center rounded-lg border border-slate-700 bg-slate-800 overflow-hidden">
+            {/* Piecewise Z-Axis Scaling Selector */}
+            <div ref={piecewiseMenuRef} className="relative h-full">
+              <button
+                type="button"
+                onClick={() => setShowPiecewisePopover((v) => !v)}
+                aria-expanded={showPiecewisePopover}
+                className={`flex items-center gap-0.5 px-1.5 h-full rounded-r-[5px] text-[10px] font-medium transition-colors ${
+                  piecewiseMode !== 'linear'
+                    ? zTransform.isActive
+                      ? 'bg-cyan-500/20 text-cyan-200'
+                      : 'bg-sky-600/20 text-sky-300'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
+                }`}
+                title="Piecewise Z-Axis Scaling for multi-order-of-magnitude layers"
+              >
+                <span className="font-mono text-[10px]">
+                  {piecewiseMode === 'linear'
+                    ? 'Lin'
+                    : piecewiseMode === 'auto'
+                    ? zTransform.isActive
+                      ? `Auto(${zTransform.bands.length})`
+                      : 'Auto(1)'
+                    : `Cust(${zTransform.bands.length})`}
+                </span>
+                {piecewiseMode === 'linear' && autoPreviewTransform.isActive && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"
+                    title={`${autoPreviewTransform.bands.length} Z-scale regimes detected`}
+                  />
+                )}
+                <ChevronDown className="w-2.5 h-2.5 opacity-70" />
+              </button>
+
+              {showPiecewisePopover && (
+                <PiecewiseZPopover
+                  mode={piecewiseMode}
+                  onChangeMode={handleChangePiecewiseMode}
+                  autoCompression={autoCompression}
+                  onChangeAutoCompression={setAutoCompression}
+                  customConfig={customZConfig}
+                  onChangeCustomConfig={setCustomZConfig}
+                  zTransform={zTransform}
+                  autoPreviewTransform={autoPreviewTransform}
+                  thicknessUnit={thicknessUnit}
+                  onSeedCustomFromAuto={handleSeedCustomFromAuto}
+                  onClose={() => setShowPiecewisePopover(false)}
+                />
+              )}
+            </div>
+          </div>
+
+          {/* Display Layers Group: Hatch, Outline, Axes, Mask, Align, Legend, Notes, Inset */}
+          <div className="inline-flex items-center h-6 rounded-md border border-slate-700 bg-slate-800 divide-x divide-slate-700/80 overflow-hidden shrink-0">
+            {/* Hatch vs Solid toggle */}
+            <button
+              type="button"
+              onClick={() => setRenderMode(renderMode === 'hatch' ? 'solid' : 'hatch')}
+              aria-pressed={renderMode === 'hatch'}
+              className={`flex items-center justify-center px-1.5 h-full transition-colors ${
+                renderMode === 'hatch'
+                  ? 'bg-sky-600/25 text-sky-300'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+              }`}
+              title={
+                renderMode === 'hatch'
+                  ? 'Cleanroom Hatching: On (click for solid fills)'
+                  : 'Cleanroom Hatching: Off (click for hatch patterns)'
+              }
+              aria-label="Toggle Cleanroom Hatching Patterns"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
+                <rect x="1.2" y="1.2" width="9.6" height="9.6" rx="1.2" />
+                <line x1="1.5" y1="6.5" x2="6.5" y2="1.5" />
+                <line x1="1.5" y1="10.5" x2="10.5" y2="1.5" />
+                <line x1="5.5" y1="10.5" x2="10.5" y2="5.5" />
+              </svg>
+            </button>
+
+            {/* Shape Outline Toggle */}
+            <button
+              type="button"
+              onClick={() => setShowOutlines((v) => !v)}
+              aria-pressed={showOutlines}
+              className={`flex items-center justify-center px-1.5 h-full transition-colors ${
+                showOutlines
+                  ? 'bg-sky-600/25 text-sky-300'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+              }`}
+              title={showOutlines ? 'Hide Shape Outlines' : 'Show Shape Outlines'}
+              aria-label="Toggle Shape Outlines"
+            >
+              <Square className="w-3 h-3" />
+            </button>
+
+            {/* Graph Axes, Grid & Labels Toggle */}
+            <button
+              type="button"
+              onClick={() => setShowAxesAndLabels((v) => !v)}
+              aria-pressed={showAxesAndLabels}
+              className={`flex items-center justify-center px-1.5 h-full transition-colors ${
+                showAxesAndLabels
+                  ? 'bg-sky-600/25 text-sky-300'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+              }`}
+              title={
+                showAxesAndLabels
+                  ? 'Hide Graph Axes, Grid & Labels'
+                  : 'Show Graph Axes, Grid & Labels'
+              }
+              aria-label="Toggle Graph Axes, Grid & Labels"
+            >
+              <Axis3d className="w-3 h-3" />
+            </button>
+
+            {/* Photomask Reticle & UV Projection Overlay Toggle */}
+            {activeStepType === 'lithography' && (
+              <button
+                type="button"
+                onClick={() => setShowMaskOverlay((v) => !v)}
+                aria-pressed={showMaskOverlay}
+                className={`flex items-center justify-center px-1.5 h-full transition-colors ${
+                  showMaskOverlay
+                    ? 'bg-sky-600/25 text-sky-300'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+                }`}
+                title={
+                  showMaskOverlay
+                    ? 'Hide Photomask Reticle & UV Projection Guides'
+                    : 'Show Photomask Reticle & UV Projection Guides'
+                }
+                aria-label="Toggle Photomask Reticle Overlay"
+              >
+                <Scan className="w-3 h-3" />
+              </button>
+            )}
+
+            {/* Global Alignment Marks Toggle */}
+            {alignmentMarks.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowAlignmentOverlay((v) => !v)}
+                aria-pressed={showAlignmentOverlay}
+                className={`flex items-center justify-center px-1.5 h-full transition-colors ${
+                  showAlignmentOverlay
+                    ? 'bg-cyan-500/20 text-cyan-300'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+                }`}
+                title={
+                  showAlignmentOverlay
+                    ? 'Hide Substrate Alignment Marks'
+                    : 'Show Substrate Alignment Marks'
+                }
+                aria-label="Toggle Substrate Alignment Marks"
+              >
+                <Crosshair className="w-3 h-3" />
+              </button>
+            )}
+
+            {/* Material Legend Toggle */}
+            <button
+              type="button"
+              onClick={() => setShowLegend((v) => !v)}
+              aria-pressed={showLegend}
+              className={`flex items-center justify-center px-1.5 h-full transition-colors ${
+                showLegend
+                  ? 'bg-sky-600/25 text-sky-300'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+              }`}
+              title={showLegend ? 'Hide Material Legend' : 'Show Material Legend'}
+              aria-label="Toggle Material Legend"
+            >
+              <Layers className="w-3 h-3" />
+            </button>
+
+            {/* Step Documentation Notes Toggle */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!showNotes) {
+                  setShowNotes(true);
+                  setNotesMinimized(false);
+                } else {
+                  setShowNotes(false);
+                }
+              }}
+              aria-pressed={showNotes}
+              className={`relative flex items-center justify-center px-1.5 h-full transition-colors ${
+                showNotes && hasActiveNotes
+                  ? 'bg-cyan-500/20 text-cyan-200'
+                  : showNotes
+                  ? 'bg-sky-600/25 text-sky-300'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+              }`}
+              title={
+                hasActiveNotes
+                  ? showNotes
+                    ? 'Hide Process Step Notes overlay'
+                    : 'Show Process Step Notes overlay'
+                  : 'Toggle Process Step Notes overlay (active step has no notes)'
+              }
+              aria-label="Toggle Process Step Notes"
+            >
+              <FileText className="w-3 h-3" />
+              {hasActiveNotes && (
+                <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-cyan-400" />
+              )}
+            </button>
+
+            {/* Step Inset Preview Toggle */}
+            {onToggleFinalInset && (canShowInsetButton ?? finalStepNumber !== undefined) && (
+              <button
+                type="button"
+                onClick={onToggleFinalInset}
+                aria-pressed={showFinalInset}
+                className={`flex items-center justify-center px-1.5 h-full transition-colors ${
+                  showFinalInset
+                    ? 'bg-emerald-600/25 text-emerald-300'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+                }`}
+                title={
+                  insetStepOptions && insetStepOptions.length === 0
+                    ? 'Inset preview (active when viewing an earlier step)'
+                    : showFinalInset
+                    ? 'Hide step inset preview'
+                    : 'Show inset preview of a later process step'
+                }
+                aria-label="Toggle Step Inset Preview"
+              >
+                <PictureInPicture2 className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          {/* Measurement & Probe Group: Ruler, Snap, Stack Probe */}
+          <div className="inline-flex items-center h-6 rounded-md border border-slate-700 bg-slate-800 divide-x divide-slate-700/80 overflow-hidden shrink-0">
             <button
               type="button"
               onClick={() => {
@@ -2134,21 +2313,22 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                   }
                 }
               }}
-              className={`flex items-center gap-1 px-2 py-1 text-[11px] font-medium transition-colors ${
+              aria-pressed={measureMode}
+              className={`flex items-center justify-center px-1.5 h-full transition-colors ${
                 measureMode
                   ? 'bg-amber-500/20 text-amber-300'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
               }`}
               title="Measure distances (Ruler)"
+              aria-label="Measure distances (Ruler)"
             >
-              <Ruler className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Ruler</span>
+              <Ruler className="w-3 h-3" />
             </button>
             <button
               type="button"
               onClick={() => setCaliperSnap((v) => !v)}
               aria-pressed={caliperSnap}
-              className={`flex items-center gap-1 px-1.5 py-1 border-l border-slate-700 text-[11px] font-medium transition-colors ${
+              className={`flex items-center justify-center px-1.5 h-full transition-colors ${
                 caliperSnap
                   ? measureMode
                     ? 'bg-emerald-500/20 text-emerald-300'
@@ -2160,99 +2340,131 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
                   ? 'Snap to Geometry: On (vertices, midpoints, edges)'
                   : 'Snap to Geometry: Off'
               }
+              aria-label="Toggle Snap to Geometry"
             >
-              <Magnet className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">Snap</span>
+              <Magnet className="w-3 h-3" />
+            </button>
+
+            {/* Stack Thickness Multi-Location Probe */}
+            <button
+              type="button"
+              onClick={() => {
+                const next = !stackProbeMode;
+                setStackProbeMode(next);
+                if (next) {
+                  setRegionZoomMode(false);
+                  setZoomSelection(null);
+                  setMeasureMode(false);
+                  if (pickReleaseMode && onTogglePickReleaseMode) {
+                    onTogglePickReleaseMode();
+                  }
+                }
+              }}
+              aria-pressed={stackProbeMode}
+              className={`flex items-center gap-0.5 px-1.5 h-full text-[10px] font-medium transition-colors ${
+                stackProbeMode
+                  ? 'bg-cyan-500/25 text-cyan-200'
+                  : stackProbes.length > 0
+                  ? 'text-cyan-300 hover:bg-slate-700/60'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
+              }`}
+              title="Stack Thickness Probe: Click across the cross-section to inspect layer-by-layer stack thickness at multiple locations"
+              aria-label="Stack Thickness Probe"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.25">
+                <line x1="1.5" y1="3" x2="10.5" y2="3" />
+                <line x1="1.5" y1="6" x2="10.5" y2="6" />
+                <line x1="1.5" y1="9" x2="10.5" y2="9" />
+                <line x1="6" y1="0.8" x2="6" y2="11.2" strokeWidth="1.4" />
+              </svg>
+              {stackProbes.length > 0 && (
+                <span className="px-1 rounded bg-cyan-500/25 text-cyan-200 font-mono text-[9px] leading-tight">
+                  {stackProbes.length}
+                </span>
+              )}
             </button>
           </div>
 
-          {/* Stack Thickness Multi-Location Probe */}
-          <button
-            type="button"
-            onClick={() => {
-              const next = !stackProbeMode;
-              setStackProbeMode(next);
-              if (next) {
-                setRegionZoomMode(false);
-                setZoomSelection(null);
-                setMeasureMode(false);
-                if (pickReleaseMode && onTogglePickReleaseMode) {
-                  onTogglePickReleaseMode();
-                }
+          {/* Export, Fullscreen & Help Group */}
+          <div className="inline-flex items-center h-6 rounded-md border border-slate-700 bg-slate-800 divide-x divide-slate-700/80 overflow-hidden shrink-0">
+            <button
+              type="button"
+              onClick={handleCopyCanvasToClipboard}
+              className={`flex items-center justify-center px-1.5 h-full transition-colors ${
+                canvasCopied
+                  ? 'bg-emerald-500/20 text-emerald-300'
+                  : 'hover:bg-slate-700/60 text-slate-300 hover:text-white'
+              }`}
+              title={
+                canvasCopied === 'png'
+                  ? 'Copied Cross-Section Image to Clipboard!'
+                  : canvasCopied === 'svg'
+                  ? 'Copied Cross-Section SVG to Clipboard!'
+                  : 'Copy Cross-Section Image to Clipboard'
               }
-            }}
-            aria-pressed={stackProbeMode}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              stackProbeMode
-                ? 'bg-cyan-500/20 border-cyan-500/60 text-cyan-200 shadow-sm'
-                : stackProbes.length > 0
-                ? 'bg-slate-800 border-cyan-500/40 text-cyan-300 hover:bg-slate-700'
-                : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
-            }`}
-            title="Stack Thickness Probe: Click across the cross-section to inspect layer-by-layer stack thickness at multiple locations"
-          >
-            <Crosshair className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Stack</span>
-            {stackProbes.length > 0 && (
-              <span className="px-1 rounded bg-cyan-500/25 text-cyan-200 font-mono text-[10px]">
-                {stackProbes.length}
-              </span>
-            )}
-          </button>
+              aria-label="Copy Cross-Section Image to Clipboard"
+            >
+              {canvasCopied ? (
+                <Check className="w-3 h-3 text-emerald-400" />
+              ) : (
+                <Copy className="w-3 h-3" />
+              )}
+            </button>
 
-          {/* Export SVG */}
-          <button
-            onClick={handleExportSingleSvg}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[11px] transition-colors"
-            title="Download Current Step SVG Vector"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline">SVG</span>
-          </button>
-
-          {onOpenBatchExport && (
             <button
               type="button"
-              onClick={onOpenBatchExport}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sky-300 hover:text-sky-200 text-[11px] font-medium transition-colors"
-              title="Batch Export All Steps as Individual SVG or PNG Files"
+              onClick={handleExportSingleSvg}
+              className="flex items-center gap-0.5 px-1.5 h-full hover:bg-slate-700/60 text-slate-300 hover:text-white text-[10px] transition-colors"
+              title="Download Current Step SVG Vector"
+              aria-label="Download Current Step SVG Vector"
             >
-              <Files className="w-3.5 h-3.5 text-sky-400" />
-              <span className="hidden lg:inline">Batch</span>
+              <Download className="w-3 h-3" />
+              <span className="font-mono text-[9px]">SVG</span>
             </button>
-          )}
 
-          {/* Canvas Fullscreen Display Mode Toggle */}
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            aria-pressed={isAnyFullscreen}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
-              isAnyFullscreen
-                ? 'bg-sky-600/25 border-sky-500/60 text-sky-200 shadow-sm'
-                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300 hover:text-white'
-            }`}
-            title={isAnyFullscreen ? 'Exit Full Screen Display (Esc)' : 'Full Screen Cross-Section Display'}
-          >
-            {isAnyFullscreen ? (
-              <Minimize className="w-3.5 h-3.5" />
-            ) : (
-              <Maximize className="w-3.5 h-3.5" />
+            {onOpenBatchExport && (
+              <button
+                type="button"
+                onClick={onOpenBatchExport}
+                className="flex items-center justify-center px-1.5 h-full hover:bg-slate-700/60 text-sky-400 hover:text-sky-200 transition-colors"
+                title="Batch Export All Steps as Individual SVG or PNG Files"
+                aria-label="Batch Export All Steps"
+              >
+                <Files className="w-3 h-3" />
+              </button>
             )}
-            <span className="hidden xl:inline">{isAnyFullscreen ? 'Exit Full' : 'Full'}</span>
-          </button>
 
-          {onOpenHelp && (
             <button
               type="button"
-              onClick={onOpenHelp}
-              className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-sky-300 transition-colors"
-              title="Help: Cross-Section Viewport, Z-Scale, Caliper & Stack Probe"
-              aria-label="Help for Cross-Section Viewport"
+              onClick={toggleFullscreen}
+              aria-pressed={isAnyFullscreen}
+              className={`flex items-center justify-center px-1.5 h-full transition-colors ${
+                isAnyFullscreen
+                  ? 'bg-sky-600/25 text-sky-200'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
+              }`}
+              title={isAnyFullscreen ? 'Exit Full Screen Display (Esc)' : 'Full Screen Cross-Section Display'}
+              aria-label={isAnyFullscreen ? 'Exit Full Screen Display' : 'Full Screen Cross-Section Display'}
             >
-              <HelpCircle className="w-3.5 h-3.5" />
+              {isAnyFullscreen ? (
+                <Minimize className="w-3 h-3" />
+              ) : (
+                <Maximize className="w-3 h-3" />
+              )}
             </button>
-          )}
+
+            {onOpenHelp && (
+              <button
+                type="button"
+                onClick={onOpenHelp}
+                className="flex items-center justify-center px-1.5 h-full hover:bg-slate-700/60 text-slate-400 hover:text-sky-300 transition-colors"
+                title="Help: Cross-Section Viewport, Z-Scale, Caliper & Stack Probe"
+                aria-label="Help for Cross-Section Viewport"
+              >
+                <HelpCircle className="w-3 h-3" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -2874,6 +3086,278 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
               </g>
             )}
 
+            {/* Global Substrate Alignment Marks */}
+            {showAlignmentOverlay && alignmentMarks.length > 0 && (() => {
+              const invZ = 1 / Math.max(0.12, zoom);
+              const frontSubY = substrateTopY ?? boundMaxY;
+              const guideTopY = toScreen(0, boundMaxY).y - 14 * invZ;
+              const guideBotY = toScreen(0, rawMinY).y + 12 * invZ;
+
+              return (
+                <g id="substrate-alignment-marks" pointerEvents="none">
+                  {alignmentMarks.map((mark) => {
+                    const xNm = Math.max(0, Math.min(waferWidth, mark.xNm));
+                    const sx = toScreen(xNm, 0).x;
+                    const color = mark.color || '#22d3ee';
+                    const frontAnchorY = toScreen(xNm, frontSubY).y;
+                    const backAnchorY = toScreen(xNm, 0).y;
+                    const showFrontGlyph = mark.side !== 'back';
+                    const showBackGlyph = mark.side === 'back' || mark.side === 'both';
+                    const labelTxt = mark.label;
+                    const boxW = Math.max(36, labelTxt.length * 5.6 + 10) * invZ;
+                    const boxH = 14 * invZ;
+                    const labelY = guideTopY - 6 * invZ;
+
+                    return (
+                      <g key={`am_svg_${mark.id}`}>
+                        {/* Vertical Substrate Datum Reference Line */}
+                        <line
+                          x1={sx}
+                          y1={guideTopY}
+                          x2={sx}
+                          y2={guideBotY}
+                          stroke={color}
+                          strokeOpacity={0.5}
+                          strokeWidth={1.0 * invZ}
+                          strokeDasharray={`${4 * invZ} ${3 * invZ}`}
+                        />
+
+                        {/* Frontside Substrate Fiducial V-Notch + Crosshair */}
+                        {showFrontGlyph && (
+                          <g transform={`translate(${sx}, ${frontAnchorY})`}>
+                            <polygon
+                              points={`${-5.5 * invZ},0 0,${5.5 * invZ} ${5.5 * invZ},0`}
+                              fill="#0f172a"
+                              fillOpacity="0.92"
+                              stroke={color}
+                              strokeWidth={1.3 * invZ}
+                            />
+                            <line
+                              x1={-6.5 * invZ}
+                              y1={0}
+                              x2={6.5 * invZ}
+                              y2={0}
+                              stroke={color}
+                              strokeWidth={1.2 * invZ}
+                            />
+                            <circle cx={0} cy={0} r={1.6 * invZ} fill={color} />
+                          </g>
+                        )}
+
+                        {/* Backside Substrate Fiducial V-Notch + Crosshair */}
+                        {showBackGlyph && (
+                          <g transform={`translate(${sx}, ${backAnchorY})`}>
+                            <polygon
+                              points={`${-5.5 * invZ},0 0,${-5.5 * invZ} ${5.5 * invZ},0`}
+                              fill="#0f172a"
+                              fillOpacity="0.92"
+                              stroke={color}
+                              strokeWidth={1.3 * invZ}
+                            />
+                            <line
+                              x1={-6.5 * invZ}
+                              y1={0}
+                              x2={6.5 * invZ}
+                              y2={0}
+                              stroke={color}
+                              strokeWidth={1.2 * invZ}
+                            />
+                            <circle cx={0} cy={0} r={1.6 * invZ} fill={color} />
+                          </g>
+                        )}
+
+                        {/* Fiducial Tag Pill */}
+                        <rect
+                          x={sx - boxW / 2}
+                          y={labelY - boxH}
+                          width={boxW}
+                          height={boxH}
+                          rx={3 * invZ}
+                          fill="#0f172a"
+                          fillOpacity="0.92"
+                          stroke={color}
+                          strokeOpacity={0.65}
+                          strokeWidth={1.0 * invZ}
+                        />
+                        <text
+                          x={sx}
+                          y={labelY - 3.5 * invZ}
+                          textAnchor="middle"
+                          fill={color}
+                          fontSize={8.5 * invZ}
+                          fontWeight="700"
+                          fontFamily="JetBrains Mono, monospace"
+                        >
+                          {labelTxt}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </g>
+              );
+            })()}
+
+            {/* Active Lithography Photomask Reticle & UV Projection Guides */}
+            {showMaskOverlay &&
+              activeStepType === 'lithography' &&
+              activeLithography &&
+              (() => {
+                const invZ = 1 / Math.max(0.12, zoom);
+                const isBackLitho = activeStepSide === 'back';
+                const isLightField = activeLithography.maskField === 'light-field';
+                const maskY = isBackLitho
+                  ? toScreen(0, rawMinY).y + 44 * invZ
+                  : toScreen(0, boundMaxY).y - 34 * invZ;
+                const plateH = 10 * invZ;
+                const plateTop = maskY - plateH / 2;
+                const xLeft = toScreen(0, 0).x;
+                const xRight = toScreen(waferWidth, 0).x;
+                const plateW = xRight - xLeft;
+                const resistSurfY = isBackLitho
+                  ? toScreen(0, boundMinY).y
+                  : toScreen(0, boundMaxY).y;
+                const rayStartY = isBackLitho ? plateTop : plateTop + plateH;
+                const reticleCenterX = (xLeft + xRight) / 2;
+                const definesMarks = Boolean(activeLithography.definesAlignmentMarks);
+                const badgeText = definesMarks
+                  ? `${activeLithography.maskName || 'Photomask'} · Align Marks`
+                  : activeLithography.maskName || 'Photomask';
+                const badgeW = Math.max(78, badgeText.length * 5.6 + 14) * invZ;
+                const badgeH = 14 * invZ;
+                const badgeY = isBackLitho
+                  ? plateTop + plateH + 5 * invZ
+                  : plateTop - badgeH - 5 * invZ;
+
+                return (
+                  <g id="litho-photomask-reticle" pointerEvents="none">
+                    {/* Mask Plate Background */}
+                    <rect
+                      x={xLeft}
+                      y={plateTop}
+                      width={plateW}
+                      height={plateH}
+                      rx={2 * invZ}
+                      fill={isLightField ? 'rgba(125, 211, 252, 0.2)' : '#0f172a'}
+                      fillOpacity={isLightField ? 1 : 0.9}
+                      stroke={
+                        definesMarks
+                          ? '#22d3ee'
+                          : isLightField
+                          ? '#38bdf8'
+                          : '#64748b'
+                      }
+                      strokeWidth={1.1 * invZ}
+                    />
+
+                    {/* Reticle Label Tag */}
+                    <rect
+                      x={reticleCenterX - badgeW / 2}
+                      y={badgeY}
+                      width={badgeW}
+                      height={badgeH}
+                      rx={3 * invZ}
+                      fill="#0f172a"
+                      fillOpacity="0.92"
+                      stroke={definesMarks ? '#22d3ee' : '#38bdf8'}
+                      strokeOpacity={definesMarks ? 0.85 : 0.45}
+                      strokeWidth={1.0 * invZ}
+                    />
+                    <text
+                      x={reticleCenterX}
+                      y={badgeY + 10 * invZ}
+                      textAnchor="middle"
+                      fill={definesMarks ? '#67e8f9' : '#bae6fd'}
+                      fontSize={8.2 * invZ}
+                      fontWeight="600"
+                      fontFamily="JetBrains Mono, monospace"
+                    >
+                      {badgeText}
+                    </text>
+
+                    {/* Aperture / Blocker Ghost Outlines & UV Projection Guides */}
+                    {activeLithography.windows.map((win) => {
+                      const sx1 = toScreen(win.xStart, 0).x;
+                      const sx2 = toScreen(win.xEnd, 0).x;
+                      const rw = Math.max(2 * invZ, sx2 - sx1);
+                      const isAlignKey = Boolean(win.isAlignKey);
+                      const outlineColor = isAlignKey
+                        ? '#22d3ee'
+                        : isLightField
+                        ? '#e2e8f0'
+                        : '#38bdf8';
+                      const rayColor = isAlignKey ? '#22d3ee' : '#38bdf8';
+                      const cx = (sx1 + sx2) / 2;
+                      const diamondR = 2.8 * invZ;
+                      return (
+                        <g key={`reticle_win_${win.id}`}>
+                          <rect
+                            x={sx1}
+                            y={plateTop}
+                            width={rw}
+                            height={plateH}
+                            fill={
+                              isAlignKey
+                                ? isLightField
+                                  ? '#083344'
+                                  : 'rgba(34, 211, 238, 0.36)'
+                                : isLightField
+                                ? '#020617'
+                                : 'rgba(56, 189, 248, 0.32)'
+                            }
+                            stroke={outlineColor}
+                            strokeWidth={(isAlignKey ? 1.4 : 1.2) * invZ}
+                          />
+                          {isAlignKey && (
+                            <polygon
+                              points={`${cx},${maskY - diamondR} ${cx + diamondR},${maskY} ${cx},${maskY + diamondR} ${cx - diamondR},${maskY}`}
+                              fill="#22d3ee"
+                              fillOpacity="0.9"
+                            />
+                          )}
+                          {/* Ghost Footprint Outline on Resist Surface */}
+                          <rect
+                            x={sx1}
+                            y={
+                              isBackLitho
+                                ? resistSurfY - 2.5 * invZ
+                                : resistSurfY - 1.5 * invZ
+                            }
+                            width={rw}
+                            height={4 * invZ}
+                            fill="none"
+                            stroke={outlineColor}
+                            strokeOpacity={isAlignKey ? '0.88' : '0.7'}
+                            strokeWidth={(isAlignKey ? 1.15 : 1.0) * invZ}
+                            strokeDasharray={`${3 * invZ} ${2 * invZ}`}
+                          />
+                          {/* Dashed UV Projection Guides */}
+                          <line
+                            x1={sx1}
+                            y1={rayStartY}
+                            x2={sx1}
+                            y2={resistSurfY}
+                            stroke={rayColor}
+                            strokeOpacity={isAlignKey ? '0.62' : '0.4'}
+                            strokeWidth={0.95 * invZ}
+                            strokeDasharray={`${2.5 * invZ} ${2.5 * invZ}`}
+                          />
+                          <line
+                            x1={sx2}
+                            y1={rayStartY}
+                            x2={sx2}
+                            y2={resistSurfY}
+                            stroke={rayColor}
+                            strokeOpacity={isAlignKey ? '0.62' : '0.4'}
+                            strokeWidth={0.95 * invZ}
+                            strokeDasharray={`${2.5 * invZ} ${2.5 * invZ}`}
+                          />
+                        </g>
+                      );
+                    })}
+                  </g>
+                );
+              })()}
+
             {/* Caliper measurement lines & geometry snap reticle */}
             {(measurePoints.length > 0 || (measureMode && activeSnapTarget)) && (() => {
               const invZ = 1 / Math.max(0.12, zoom);
@@ -3415,161 +3899,230 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
           )}
         </svg>
 
-        {/* Active Sacrificial Release Pick Mode Banner */}
-        {pickReleaseMode && !regionZoomMode && activeReleaseConfig && (
-          <div
-            onPointerDown={(e) => e.stopPropagation()}
-            className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/92 border border-emerald-500/60 text-emerald-200 text-[11px] font-medium shadow-lg backdrop-blur-md"
-          >
-            <Crosshair className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span>
-              Keep Regions ({getMaterialById(materials, activeReleaseConfig.targetMaterialId).name} ·{' '}
-              {activeReleaseConfig.side === 'front'
-                ? 'Front +Z'
-                : activeReleaseConfig.side === 'back'
-                ? 'Back -Z'
-                : 'Both ±Z'}
-              ): Click dashed pocket or drag X-range to protect (not etched)
-            </span>
-            <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono text-[10px]">
-              {activeReleaseConfig.regions.length} kept
-            </span>
-            {activeReleaseConfig.regions.length > 0 && onClearReleaseRegions && (
+        {/* Top-Left Stacked Canvas Overlays (Mode Banners + Step Documentation Notes) */}
+        <div className="absolute top-3 left-3 z-10 flex flex-col items-start gap-2 pointer-events-none max-w-[calc(100%-24px)]">
+          {/* Active Sacrificial Release Pick Mode Banner */}
+          {pickReleaseMode && !regionZoomMode && activeReleaseConfig && (
+            <div
+              onPointerDown={(e) => e.stopPropagation()}
+              className="pointer-events-auto flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/92 border border-emerald-500/60 text-emerald-200 text-[11px] font-medium shadow-lg backdrop-blur-md"
+            >
+              <Crosshair className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>
+                Keep Regions ({getMaterialById(materials, activeReleaseConfig.targetMaterialId).name} ·{' '}
+                {activeReleaseConfig.side === 'front'
+                  ? 'Front +Z'
+                  : activeReleaseConfig.side === 'back'
+                  ? 'Back -Z'
+                  : 'Both ±Z'}
+                ): Click dashed pocket or drag X-range to protect (not etched)
+              </span>
+              <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono text-[10px]">
+                {activeReleaseConfig.regions.length} kept
+              </span>
+              {activeReleaseConfig.regions.length > 0 && onClearReleaseRegions && (
+                <button
+                  type="button"
+                  onClick={onClearReleaseRegions}
+                  className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-rose-950/60 text-slate-300 hover:text-rose-200 text-[10px]"
+                >
+                  Clear
+                </button>
+              )}
+              {onTogglePickReleaseMode && (
+                <button
+                  type="button"
+                  onClick={onTogglePickReleaseMode}
+                  className="px-1.5 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-semibold"
+                >
+                  Done
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Active Magnifying Glass Mode Banner */}
+          {regionZoomMode && (
+            <div
+              className={`pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/90 border text-[11px] font-medium shadow-lg backdrop-blur-md transition-colors ${
+                ctrlKeyDown
+                  ? 'border-amber-500/60 text-amber-300'
+                  : 'border-sky-500/60 text-sky-300'
+              }`}
+            >
+              <Search
+                className={`w-3.5 h-3.5 shrink-0 ${
+                  ctrlKeyDown ? 'text-amber-400' : 'text-sky-400'
+                }`}
+              />
+              <span>
+                {ctrlKeyDown
+                  ? 'Ctrl held: Drag or click to zoom out · Preserves aspect ratio'
+                  : 'Drag region to zoom · Click to zoom 2× · Hold Ctrl to zoom out'}
+              </span>
               <button
                 type="button"
-                onClick={onClearReleaseRegions}
-                className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-rose-950/60 text-slate-300 hover:text-rose-200 text-[10px]"
-              >
-                Clear
-              </button>
-            )}
-            {onTogglePickReleaseMode && (
-              <button
-                type="button"
-                onClick={onTogglePickReleaseMode}
-                className="px-1.5 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-semibold"
+                onClick={() => {
+                  setRegionZoomMode(false);
+                  setZoomSelection(null);
+                }}
+                className="ml-1 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px]"
               >
                 Done
               </button>
-            )}
-          </div>
-        )}
+            </div>
+          )}
 
-        {/* Active Magnifying Glass Mode Banner */}
-        {regionZoomMode && (
-          <div
-            className={`absolute top-3 left-3 z-10 flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/90 border text-[11px] font-medium shadow-lg backdrop-blur-md transition-colors ${
-              ctrlKeyDown
-                ? 'border-amber-500/60 text-amber-300'
-                : 'border-sky-500/60 text-sky-300'
-            }`}
-          >
-            <Search
-              className={`w-3.5 h-3.5 shrink-0 ${
-                ctrlKeyDown ? 'text-amber-400' : 'text-sky-400'
-              }`}
-            />
-            <span>
-              {ctrlKeyDown
-                ? 'Ctrl held: Drag or click to zoom out · Preserves aspect ratio'
-                : 'Drag region to zoom · Click to zoom 2× · Hold Ctrl to zoom out'}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setRegionZoomMode(false);
-                setZoomSelection(null);
-              }}
-              className="ml-1 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px]"
+          {/* Active Caliper Mode Banner */}
+          {measureMode && !regionZoomMode && (
+            <div
+              onPointerDown={(e) => e.stopPropagation()}
+              className="pointer-events-auto flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/92 border border-amber-500/60 text-amber-200 text-[11px] font-medium shadow-lg backdrop-blur-md"
             >
-              Done
-            </button>
-          </div>
-        )}
-
-        {/* Active Caliper Mode Banner */}
-        {measureMode && !regionZoomMode && (
-          <div
-            onPointerDown={(e) => e.stopPropagation()}
-            className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/92 border border-amber-500/60 text-amber-200 text-[11px] font-medium shadow-lg backdrop-blur-md"
-          >
-            <Ruler className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            {measurePoints.length === 2 ? (() => {
-              const dxNm = Math.abs(measurePoints[1].x - measurePoints[0].x);
-              const dyNm = Math.abs(measurePoints[1].y - measurePoints[0].y);
-              const distNm = Math.hypot(dxNm, dyNm);
-              return (
-                <span className="font-mono text-[11px] text-amber-200">
-                  ΔX {formatThickness(dxNm, thicknessUnit)} · ΔY {formatThickness(dyNm, thicknessUnit)} · L {formatThickness(distNm, thicknessUnit)}
+              <Ruler className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              {measurePoints.length === 2 ? (() => {
+                const dxNm = Math.abs(measurePoints[1].x - measurePoints[0].x);
+                const dyNm = Math.abs(measurePoints[1].y - measurePoints[0].y);
+                const distNm = Math.hypot(dxNm, dyNm);
+                return (
+                  <span className="font-mono text-[11px] text-amber-200">
+                    ΔX {formatThickness(dxNm, thicknessUnit)} · ΔY {formatThickness(dyNm, thicknessUnit)} · L {formatThickness(distNm, thicknessUnit)}
+                  </span>
+                );
+              })() : (
+                <span>
+                  {measurePoints.length === 0
+                    ? 'Click start point to measure'
+                    : 'Click end point to measure'}
                 </span>
-              );
-            })() : (
-              <span>
-                {measurePoints.length === 0
-                  ? 'Click start point to measure'
-                  : 'Click end point to measure'}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={() => setCaliperSnap((v) => !v)}
-              aria-pressed={caliperSnap}
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium transition-colors ${
-                caliperSnap
-                  ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-              }`}
-              title="Toggle snapping to polygon vertices, midpoints, and edges"
-            >
-              <Magnet className="w-3 h-3" />
-              <span>Snap: {caliperSnap ? 'On' : 'Off'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setCaliperAngleSnap((v) => !v)}
-              aria-pressed={caliperAngleSnap}
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium transition-colors ${
-                caliperAngleSnap
-                  ? shiftKeyDown && measurePoints.length === 1
-                    ? 'bg-violet-500/30 border-violet-400 text-violet-200'
-                    : 'bg-sky-500/20 border-sky-500/60 text-sky-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-              }`}
-              title="When On, holding Shift forces horizontal, vertical, or 45° measurement"
-            >
-              <span>Shift H/V/45°: {caliperAngleSnap ? 'On' : 'Off'}</span>
-            </button>
-            {caliperAngleSnap && shiftKeyDown && measurePoints.length === 1 && (
-              <span className="px-1.5 py-0.5 rounded bg-violet-500/25 border border-violet-400/60 text-violet-200 text-[10px] font-mono font-semibold">
-                {(() => {
-                  const target = activeSnapTarget?.point ?? hoverWorldPos;
-                  if (!target) return '0/45/90°';
-                  const { modeLabel } = constrainCaliperPoint(measurePoints[0], target);
-                  return modeLabel === 'H' ? '0° (H)' : modeLabel === 'V' ? '90° (V)' : '45°';
-                })()}
-              </span>
-            )}
-            {measurePoints.length > 0 && (
+              )}
               <button
                 type="button"
-                onClick={() => setMeasurePoints([])}
+                onClick={() => setCaliperSnap((v) => !v)}
+                aria-pressed={caliperSnap}
+                className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium transition-colors ${
+                  caliperSnap
+                    ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                }`}
+                title="Toggle snapping to polygon vertices, midpoints, and edges"
+              >
+                <Magnet className="w-3 h-3" />
+                <span>Snap: {caliperSnap ? 'On' : 'Off'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCaliperAngleSnap((v) => !v)}
+                aria-pressed={caliperAngleSnap}
+                className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium transition-colors ${
+                  caliperAngleSnap
+                    ? shiftKeyDown && measurePoints.length === 1
+                      ? 'bg-violet-500/30 border-violet-400 text-violet-200'
+                      : 'bg-sky-500/20 border-sky-500/60 text-sky-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                }`}
+                title="When On, holding Shift forces horizontal, vertical, or 45° measurement"
+              >
+                <span>Shift H/V/45°: {caliperAngleSnap ? 'On' : 'Off'}</span>
+              </button>
+              {caliperAngleSnap && shiftKeyDown && measurePoints.length === 1 && (
+                <span className="px-1.5 py-0.5 rounded bg-violet-500/25 border border-violet-400/60 text-violet-200 text-[10px] font-mono font-semibold">
+                  {(() => {
+                    const target = activeSnapTarget?.point ?? hoverWorldPos;
+                    if (!target) return '0/45/90°';
+                    const { modeLabel } = constrainCaliperPoint(measurePoints[0], target);
+                    return modeLabel === 'H' ? '0° (H)' : modeLabel === 'V' ? '90° (V)' : '45°';
+                  })()}
+                </span>
+              )}
+              {measurePoints.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setMeasurePoints([])}
+                  className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px]"
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setMeasureMode(false);
+                  setMeasurePoints([]);
+                }}
                 className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px]"
               >
-                Clear
+                Done
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setMeasureMode(false);
-                setMeasurePoints([]);
-              }}
-              className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px]"
-            >
-              Done
-            </button>
-          </div>
-        )}
+            </div>
+          )}
+
+          {/* Active Step Process Documentation Note Label / Floating Card */}
+          {showNotes && hasActiveNotes && (
+            notesMinimized ? (
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => setNotesMinimized(false)}
+                title={trimmedActiveNotes}
+                className="pointer-events-auto flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/92 hover:bg-slate-800/95 border border-cyan-500/40 text-slate-200 text-[11px] shadow-lg backdrop-blur-md max-w-[min(320px,calc(100vw-48px))] transition-colors"
+              >
+                <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span className="font-mono text-[10px] font-semibold text-cyan-300 shrink-0">
+                  {stepNumber && stepNumber > 0 ? `Step ${stepNumber} Note` : 'Note'}:
+                </span>
+                <span className="truncate text-slate-300">{trimmedActiveNotes}</span>
+                <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+              </button>
+            ) : (
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                onWheel={(e) => e.stopPropagation()}
+                className="pointer-events-auto flex flex-col bg-slate-900/92 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl overflow-hidden max-w-[min(340px,calc(100vw-48px))]"
+              >
+                <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-slate-950/80 border-b border-slate-800/90">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-cyan-300 shrink-0">
+                      {stepNumber && stepNumber > 0 ? `Step ${stepNumber} Note` : 'Step Note'}
+                    </span>
+                    {activeStepTitle && (
+                      <span
+                        className="text-[11px] text-slate-400 truncate"
+                        title={activeStepTitle}
+                      >
+                        · {activeStepTitle}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setNotesMinimized(true)}
+                      className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                      title="Collapse note label"
+                      aria-label="Collapse step note"
+                    >
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowNotes(false)}
+                      className="p-0.5 rounded text-slate-400 hover:text-rose-300 hover:bg-slate-800 transition-colors"
+                      title="Hide step note overlay"
+                      aria-label="Hide step note overlay"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                <div className="px-3 py-2 max-h-32 overflow-y-auto text-xs text-slate-200 leading-relaxed whitespace-pre-wrap break-words select-text">
+                  {trimmedActiveNotes}
+                </div>
+              </div>
+            )
+          )}
+        </div>
 
         {/* Floating Later Process Step Inset (Top-Right when earlier step is selected) */}
         {showFinalInset &&
@@ -3990,61 +4543,82 @@ export const CrossSectionCanvas: React.FC<CrossSectionCanvasProps> = ({
             const activePoly = (pickReleaseMode && hoveredGhostPolygon) || hoveredPolygon;
             if (!activePoly) return null;
             const isGhostTarget = Boolean(pickReleaseMode && hoveredGhostPolygon);
+            const mat = getMaterialById(materials, activePoly.materialId);
+            const zSpanNm = Math.round(activePoly.yMax - activePoly.yMin);
+            const localNm = hoverWorldPos
+              ? computeLocalThicknessAtPoint(activePoly, hoverWorldPos.x, hoverWorldPos.y)
+              : null;
+            const isSubstrateOrigin = Boolean(activePoly.stepId?.startsWith('substrate_'));
+            const originStep =
+              activePoly.stepId && !isSubstrateOrigin
+                ? stepById.get(activePoly.stepId)
+                : undefined;
+            const originNote = originStep?.notes?.trim() || '';
+            const hasOriginNote = originNote.length > 0;
+            const tooltipMaxW = hasOriginNote ? 280 : 230;
+            const tooltipMaxH = hasOriginNote ? 175 : 108;
+
             return (
               <div
-                className={`absolute pointer-events-none z-20 px-3 py-2 rounded-xl bg-slate-900/95 border text-white shadow-2xl backdrop-blur-md ${
+                className={`absolute pointer-events-none z-20 px-3 py-2 rounded-xl bg-slate-900/95 border text-white shadow-2xl backdrop-blur-md max-w-[270px] ${
                   isGhostTarget ? 'border-emerald-500/60' : 'border-sky-500/50'
                 }`}
                 style={{
-                  left: `${Math.min(svgWidth - 230, Math.max(10, mousePos.x + 15))}px`,
-                  top: `${Math.max(10, Math.min(svgHeight - 108, mousePos.y - 78))}px`,
+                  left: `${Math.min(Math.max(10, svgWidth - tooltipMaxW), Math.max(10, mousePos.x + 15))}px`,
+                  top: `${Math.max(10, Math.min(Math.max(10, svgHeight - tooltipMaxH), mousePos.y - 78))}px`,
                 }}
               >
-                {(() => {
-                  const mat = getMaterialById(materials, activePoly.materialId);
-                  const zSpanNm = Math.round(activePoly.yMax - activePoly.yMin);
-                  const localNm = hoverWorldPos
-                    ? computeLocalThicknessAtPoint(activePoly, hoverWorldPos.x, hoverWorldPos.y)
-                    : null;
-                  return (
-                    <div className="space-y-1 text-xs">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span
-                            className="w-3 h-3 rounded-full border border-white/20 shrink-0"
-                            style={{ backgroundColor: mat.color }}
-                          />
-                          <span className="font-semibold text-sky-300 truncate">{mat.name}</span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 capitalize shrink-0">
-                          {mat.category}
-                        </span>
-                      </div>
-                      <div className="text-[11px] font-mono space-y-0.5 pt-0.5">
-                        <div className="flex items-center justify-between gap-3 text-slate-100">
-                          <span className="text-slate-400">Local Thickness:</span>
-                          <span className="font-semibold text-emerald-300">
-                            {formatThickness(localNm ?? zSpanNm, thicknessUnit)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 text-slate-300">
-                          <span className="text-slate-400">Total Z-Span:</span>
-                          <span>{formatThickness(zSpanNm, thicknessUnit)}</span>
-                        </div>
-                      </div>
-                      {activePoly.stepId && (
-                        <div className="text-[10px] text-slate-400 pt-0.5 border-t border-slate-800/80">
-                          Step: {activePoly.stepId}
-                        </div>
-                      )}
-                      {isGhostTarget && (
-                        <div className="text-[10px] font-semibold text-emerald-300 pt-0.5 border-t border-emerald-500/30">
-                          Click to keep intact (exclude from etch)
-                        </div>
-                      )}
+                <div className="space-y-1 text-xs">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className="w-3 h-3 rounded-full border border-white/20 shrink-0"
+                        style={{ backgroundColor: mat.color }}
+                      />
+                      <span className="font-semibold text-sky-300 truncate">{mat.name}</span>
                     </div>
-                  );
-                })()}
+                    <span className="text-[10px] text-slate-400 capitalize shrink-0">
+                      {mat.category}
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-mono space-y-0.5 pt-0.5">
+                    <div className="flex items-center justify-between gap-3 text-slate-100">
+                      <span className="text-slate-400">Local Thickness:</span>
+                      <span className="font-semibold text-emerald-300">
+                        {formatThickness(localNm ?? zSpanNm, thicknessUnit)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-slate-300">
+                      <span className="text-slate-400">Total Z-Span:</span>
+                      <span>{formatThickness(zSpanNm, thicknessUnit)}</span>
+                    </div>
+                  </div>
+                  {activePoly.stepId && (
+                    <div className="text-[10px] text-slate-400 pt-0.5 border-t border-slate-800/80 truncate">
+                      {isSubstrateOrigin
+                        ? 'Origin: Starting Substrate Stack'
+                        : originStep
+                        ? `Step ${originStep.stepNumber}: ${originStep.title}`
+                        : `Step: ${activePoly.stepId}`}
+                    </div>
+                  )}
+                  {hasOriginNote && (
+                    <div className="pt-1 border-t border-slate-800/80 space-y-0.5">
+                      <div className="flex items-center gap-1 text-[10px] font-semibold text-cyan-300">
+                        <FileText className="w-3 h-3 text-cyan-400 shrink-0" />
+                        <span>Notes</span>
+                      </div>
+                      <p className="text-[11px] text-slate-200 leading-snug whitespace-pre-wrap break-words line-clamp-4">
+                        {originNote}
+                      </p>
+                    </div>
+                  )}
+                  {isGhostTarget && (
+                    <div className="text-[10px] font-semibold text-emerald-300 pt-0.5 border-t border-emerald-500/30">
+                      Click to keep intact (exclude from etch)
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })()}

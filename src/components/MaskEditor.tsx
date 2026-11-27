@@ -4,26 +4,65 @@
  */
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { DesignVariable, LithographyConfig, MaskWindow, ProcessStep, VariableUnit } from '../types/microfab';
+import {
+  DesignVariable,
+  GlobalAlignmentMark,
+  LithographyConfig,
+  MaskWindow,
+  ProcessSide,
+  ProcessStep,
+  VariableUnit,
+} from '../types/microfab';
 import { resolveResistMaterialId } from '../lib/materials';
 import {
   MaskWindowArrayOptions,
   createMaskWindowArray,
+  deriveGlobalAlignmentMarkFromSelection,
   duplicateMaskWindow,
   getMaskArrowStepSizes,
 } from '../lib/maskUtils';
 import { getActiveStepVariant } from '../lib/variantUtils';
 import { ParamBindingBadge, ParamBindingPanel } from './ParamBindingControl';
 import { MaskWindowArrayPanel } from './MaskWindowArrayPanel';
-import { Plus, Trash2, ArrowLeftRight, MoveHorizontal, GripVertical, Scan, Edit2, Check, Lock, Unlock, ChevronUp, ChevronDown, Copy, LayoutGrid, Undo2, Redo2, GitBranch, Eraser } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  ArrowLeftRight,
+  MoveHorizontal,
+  GripVertical,
+  Scan,
+  Edit2,
+  Check,
+  Lock,
+  Unlock,
+  ChevronUp,
+  ChevronDown,
+  Copy,
+  LayoutGrid,
+  Undo2,
+  Redo2,
+  GitBranch,
+  Eraser,
+  Pin,
+  X,
+  Crosshair,
+} from 'lucide-react';
+
+const ALIGN_MARK_COLORS = ['#22d3ee', '#34d399', '#f472b6', '#a78bfa', '#fbbf24'];
 
 interface MaskEditorProps {
   step: ProcessStep;
   waferWidth: number; // in nm
   onUpdateStep: (updated: ProcessStep) => void;
   onOpenMaskLevels?: () => void;
+  alignmentMarks?: GlobalAlignmentMark[];
+  onUpdateAlignmentMarks?: (marks: GlobalAlignmentMark[]) => void;
   isMinimized?: boolean;
   onToggleMinimize?: () => void;
+  isPinned?: boolean;
+  onTogglePin?: () => void;
+  dockPosition?: 'top' | 'bottom';
+  overlayExpand?: boolean;
   variables?: DesignVariable[];
   onCreateVariable?: (name: string, value: number, unit: VariableUnit, description?: string) => void;
   onOpenVariablesModal?: () => void;
@@ -131,8 +170,14 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
   waferWidth,
   onUpdateStep,
   onOpenMaskLevels,
+  alignmentMarks = [],
+  onUpdateAlignmentMarks,
   isMinimized: isMinimizedProp,
   onToggleMinimize,
+  isPinned = false,
+  onTogglePin,
+  dockPosition = 'bottom',
+  overlayExpand = false,
   variables = [],
   onCreateVariable,
   onOpenVariablesModal,
@@ -149,6 +194,13 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
   const [editingMaskName, setEditingMaskName] = useState<string>(litho.maskName || '');
   const [internalMinimized, setInternalMinimized] = useState<boolean>(false);
   const [showCoordRows, setShowCoordRows] = useState<boolean>(true);
+  const [showAlignPanel, setShowAlignPanel] = useState<boolean>(false);
+  const [draggingMark, setDraggingMark] = useState<{
+    id: string;
+    startClientX: number;
+    initialXNm: number;
+  } | null>(null);
+  const [markDragPreview, setMarkDragPreview] = useState<{ id: string; xNm: number } | null>(null);
   const [openWinBind, setOpenWinBind] = useState<{
     winId: string;
     field: 'width' | 'xStart' | 'xEnd';
@@ -863,6 +915,126 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
     });
   };
 
+  const toggleDefinesAlignmentMarks = () => {
+    commitLitho({
+      ...litho,
+      definesAlignmentMarks: !litho.definesAlignmentMarks,
+    });
+  };
+
+  const handleToggleWindowAlignKey = (id: string) => {
+    commitLitho({
+      ...litho,
+      windows: windows.map((w) =>
+        w.id === id ? { ...w, isAlignKey: w.isAlignKey ? undefined : true } : w
+      ),
+    });
+  };
+
+  const handleToggleSelectedAlignKeys = (ids: string[]) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const allMarked = windows
+      .filter((w) => idSet.has(w.id))
+      .every((w) => Boolean(w.isAlignKey));
+    const nextVal = allMarked ? undefined : true;
+    commitLitho({
+      ...litho,
+      windows: windows.map((w) => (idSet.has(w.id) ? { ...w, isAlignKey: nextVal } : w)),
+    });
+  };
+
+  const handleSyncMarksFromWindows = (overrideSelectedIds?: string[]) => {
+    if (!onUpdateAlignmentMarks || windows.length === 0) return;
+    const activeIds = overrideSelectedIds ?? selectedWindowIds;
+    const selectedWins =
+      activeIds.length > 0 ? windows.filter((w) => activeIds.includes(w.id)) : [];
+    const { marks } = deriveGlobalAlignmentMarkFromSelection({
+      existingMarks: alignmentMarks,
+      selectedWindows: selectedWins,
+      allWindows: windows,
+      waferWidth,
+      side: step.side,
+      definedByStepId: step.id,
+      palette: ALIGN_MARK_COLORS,
+    });
+    onUpdateAlignmentMarks(marks);
+    if (!litho.definesAlignmentMarks) {
+      commitLitho({ ...litho, definesAlignmentMarks: true });
+    }
+  };
+
+  const handleAddAlignmentMark = () => {
+    if (!onUpdateAlignmentMarks) return;
+    const candidates = [0.1, 0.9, 0.5, 0.25, 0.75, 0.15, 0.85, 0.35, 0.65];
+    let chosenX = Math.round((waferWidth * 0.1) / 50) * 50;
+    for (const frac of candidates) {
+      const candidate = Math.round((waferWidth * frac) / 50) * 50;
+      if (!alignmentMarks.some((m) => Math.abs(m.xNm - candidate) < waferWidth * 0.04)) {
+        chosenX = candidate;
+        break;
+      }
+    }
+    let idx = alignmentMarks.length + 1;
+    let label = `AM-${idx}`;
+    while (alignmentMarks.some((m) => m.label.toLowerCase() === label.toLowerCase())) {
+      idx += 1;
+      label = `AM-${idx}`;
+    }
+    const newMark: GlobalAlignmentMark = {
+      id: `am_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      label,
+      xNm: Math.max(0, Math.min(waferWidth, chosenX)),
+      side: step.side === 'back' ? 'back' : step.side === 'both' ? 'both' : 'front',
+      color: ALIGN_MARK_COLORS[alignmentMarks.length % ALIGN_MARK_COLORS.length],
+      ...(litho.definesAlignmentMarks ? { definedByStepId: step.id } : {}),
+    };
+    onUpdateAlignmentMarks([...alignmentMarks, newMark]);
+  };
+
+  const handleUpdateAlignmentMark = (id: string, patch: Partial<GlobalAlignmentMark>) => {
+    if (!onUpdateAlignmentMarks) return;
+    onUpdateAlignmentMarks(
+      alignmentMarks.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              ...patch,
+              ...(patch.xNm !== undefined
+                ? { xNm: Math.max(0, Math.min(waferWidth, Math.round(patch.xNm))) }
+                : {}),
+            }
+          : m
+      )
+    );
+  };
+
+  const handleDeleteAlignmentMark = (id: string) => {
+    if (!onUpdateAlignmentMarks) return;
+    onUpdateAlignmentMarks(alignmentMarks.filter((m) => m.id !== id));
+  };
+
+  const handleMarkPointerDown = (
+    e: React.PointerEvent<HTMLDivElement>,
+    mark: GlobalAlignmentMark
+  ) => {
+    if (!onUpdateAlignmentMarks) return;
+    e.preventDefault();
+    e.stopPropagation();
+    containerRef.current?.focus({ preventScroll: true });
+    try {
+      containerRef.current?.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    setDraggingMark({
+      id: mark.id,
+      startClientX: e.clientX,
+      initialXNm: mark.xNm,
+    });
+    setMarkDragPreview({ id: mark.id, xNm: mark.xNm });
+  };
+
   // Track background marquee drag start
   const handleTrackPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !containerRef.current) return;
@@ -961,6 +1133,21 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
 
   // Pointer move handler
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (draggingMark && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      if (rect.width > 0) {
+        const pxToNm = waferWidth / rect.width;
+        const deltaNm = (e.clientX - draggingMark.startClientX) * pxToNm;
+        const snap = 50;
+        const nextX = Math.max(
+          0,
+          Math.min(waferWidth, Math.round((draggingMark.initialXNm + deltaNm) / snap) * snap)
+        );
+        setMarkDragPreview({ id: draggingMark.id, xNm: nextX });
+      }
+      return;
+    }
+
     if (trackMarquee && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       if (rect.width > 0) {
@@ -1037,6 +1224,20 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (draggingMark) {
+      if (markDragPreview && markDragPreview.id === draggingMark.id) {
+        handleUpdateAlignmentMark(draggingMark.id, { xNm: markDragPreview.xNm });
+      }
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      setDraggingMark(null);
+      setMarkDragPreview(null);
+      return;
+    }
+
     if (trackMarquee) {
       const distPx = Math.abs(e.clientX - trackMarquee.startClientX);
       if (distPx >= 4) {
@@ -1101,32 +1302,41 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
 
   if (isMinimized) {
     return (
-      <div className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-slate-200 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-xs font-semibold tracking-wider uppercase text-sky-400 shrink-0">
+      <div
+        className={
+          overlayExpand
+            ? 'h-9 bg-slate-900 border border-slate-800 rounded-xl px-2.5 sm:px-3 text-slate-200 flex items-center justify-between gap-2'
+            : 'bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-slate-200 flex items-center justify-between gap-2'
+        }
+      >
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+          <span className="text-[11px] font-semibold tracking-wider uppercase text-sky-400 shrink-0 hidden md:inline">
             Photomask Track
           </span>
+          <span className="text-[11px] font-semibold tracking-wider uppercase text-sky-400 shrink-0 md:hidden">
+            Mask
+          </span>
           {step.side === 'back' && (
-            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-semibold shrink-0">
-              Backside
+            <span className="text-[10px] font-mono font-semibold text-amber-300 shrink-0">
+              · Backside
             </span>
           )}
           {step.side === 'both' && (
-            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[10px] font-semibold shrink-0">
-              Both Sides
+            <span className="text-[10px] font-mono font-semibold text-emerald-300 shrink-0">
+              · Both Sides
             </span>
           )}
           <span className="text-xs text-slate-600 shrink-0">·</span>
-          <span className="text-xs text-slate-300 font-mono truncate">
+          <span className="text-xs text-slate-200 font-mono truncate">
             {litho.maskName || 'Photomask Layer'}
           </span>
           {activeVariant && !isMaskSharedWithOtherVariant && (
             <span
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium shrink-0 bg-violet-500/15 text-violet-300 border-violet-500/35"
+              className="inline-flex items-center gap-1 text-[10px] font-medium shrink-0 text-violet-300"
               title="Dedicated mask branch assigned to this variant in Mask Manager."
             >
               <GitBranch className="w-2.5 h-2.5" />
-              <span>{activeVariant.name} · Mask Branch</span>
+              <span>{activeVariant.name}</span>
             </span>
           )}
           {activeVariant && isMaskSharedWithOtherVariant && (
@@ -1139,7 +1349,7 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
                 onClick={() =>
                   onUpdateStep({ ...latestStepRef.current, variantMaskEditMode: 'shared' })
                 }
-                className={`px-1.5 py-0.5 rounded font-medium transition-colors ${
+                className={`px-1.5 py-0.5 rounded font-medium transition-colors whitespace-nowrap shrink-0 ${
                   variantMaskEditMode === 'shared'
                     ? 'bg-sky-600 text-white'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1153,7 +1363,7 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
                 onClick={() =>
                   onUpdateStep({ ...latestStepRef.current, variantMaskEditMode: 'branch' })
                 }
-                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium transition-colors ${
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium transition-colors whitespace-nowrap shrink-0 ${
                   variantMaskEditMode === 'branch'
                     ? 'bg-violet-600 text-white'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1161,42 +1371,91 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
                 title="Generate a new mask branch in Mask Manager when apertures are modified"
               >
                 <GitBranch className="w-2.5 h-2.5" />
-                <span>New Branch</span>
+                <span>Branch</span>
               </button>
             </div>
           )}
-          <span className="text-xs text-slate-600 shrink-0 hidden sm:inline">·</span>
-          <span className="text-[11px] font-mono text-slate-400 shrink-0 hidden sm:inline">
-            <span className={isLightField ? 'text-sky-300' : 'text-slate-200'}>
-              {isLightField ? 'Light-Field' : 'Dark-Field'}
-            </span>
-            {' · '}
-            <span className="capitalize text-slate-200">{litho.polarity} resist</span>
-            {' · '}
-            {windows.length} {windows.length === 1 ? featureNoun : `${featureNoun}s`}
+          <span className="text-[11px] font-mono text-slate-500 shrink-0 hidden lg:inline tabular-nums">
+            · {windows.length} {windows.length === 1 ? featureNoun : `${featureNoun}s`}
           </span>
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          {litho.definesAlignmentMarks && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAlignPanel(true);
+                handleToggleMinimize();
+              }}
+              className="flex items-center gap-1 px-1.5 py-0.5 text-[10.5px] font-medium rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 whitespace-nowrap shrink-0 transition-colors"
+              title="This lithography step defines substrate alignment marks — click to configure"
+            >
+              <Crosshair className="w-3 h-3 shrink-0" />
+              <span className="hidden sm:inline">Align Marks</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={toggleMaskField}
+            className={`flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
+              isLightField
+                ? 'bg-sky-950/60 hover:bg-sky-900/60 text-sky-200 border-sky-500/50'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+            }`}
+            title={
+              isLightField
+                ? 'Light-Field Mask: clear quartz background; movable blocks are opaque chrome blockers. Click to switch to Dark-Field.'
+                : 'Dark-Field Mask: opaque chrome background; movable blocks are clear UV apertures. Click to switch to Light-Field.'
+            }
+          >
+            <span
+              className={`w-2.5 h-2.5 rounded-xs border shrink-0 flex items-center justify-center ${
+                isLightField
+                  ? 'bg-sky-200/85 border-sky-300'
+                  : 'bg-slate-950 border-slate-500'
+              }`}
+            >
+              <span
+                className={`w-1 h-1 rounded-[1px] ${
+                  isLightField ? 'bg-slate-900' : 'bg-amber-300'
+                }`}
+              />
+            </span>
+            <span>{isLightField ? 'Light-Field' : 'Dark-Field'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={togglePolarity}
+            className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors whitespace-nowrap shrink-0"
+            title="Switch Photoresist Tone: Positive (UV-exposed dissolves) vs Negative (UV-exposed crosslinks & stays)"
+          >
+            <ArrowLeftRight className="w-3 h-3 text-amber-400 shrink-0" />
+            <span className="capitalize">{litho.polarity}</span>
+            <span className="hidden md:inline text-slate-400">resist</span>
+          </button>
+
           {onOpenMaskLevels && (
             <button
               type="button"
               onClick={onOpenMaskLevels}
-              className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 border border-slate-700 transition-colors"
+              className="flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-md bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 border border-slate-700 transition-colors whitespace-nowrap shrink-0"
               title="Open Photolithography Mask Levels Panel"
             >
-              <Scan className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Mask Levels</span>
+              <Scan className="w-3 h-3" />
+              <span className="hidden sm:inline">Masks</span>
             </button>
           )}
           <button
             type="button"
             onClick={handleToggleMinimize}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+            className="flex items-center justify-center p-1 rounded-md bg-sky-600 hover:bg-sky-500 text-white transition-colors shrink-0 shadow-sm"
             title="Expand Photomask Track"
+            aria-label="Expand Photomask Track"
           >
-            <ChevronDown className="w-3.5 h-3.5 text-sky-400" />
-            <span>Expand</span>
+            <ChevronDown className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -1212,7 +1471,15 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
     : 'Chrome bg blocks UV · Clear apertures expose & crosslink resist';
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-2 text-slate-200">
+    <div
+      className={
+        overlayExpand
+          ? 'absolute top-0 inset-x-0 z-40 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl p-2 text-slate-200 shadow-2xl max-h-[58vh] overflow-y-auto'
+          : dockPosition === 'bottom'
+          ? 'bg-slate-900 border border-slate-800 rounded-xl p-2 text-slate-200 max-h-[42vh] overflow-y-auto'
+          : 'bg-slate-900 border border-slate-800 rounded-xl p-2 text-slate-200'
+      }
+    >
       <div className="flex flex-wrap items-center justify-between gap-1.5 pb-1.5 mb-1.5 border-b border-slate-800">
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <span className="text-[11px] font-semibold tracking-wider uppercase text-sky-400 shrink-0">
@@ -1410,6 +1677,28 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
             <span>{featureNounCap}</span>
           </button>
 
+          {onUpdateAlignmentMarks && (
+            <button
+              type="button"
+              onClick={() => setShowAlignPanel((prev) => !prev)}
+              aria-pressed={showAlignPanel}
+              className={`flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
+                showAlignPanel || litho.definesAlignmentMarks
+                  ? 'bg-cyan-500/20 border-cyan-500/60 text-cyan-200'
+                  : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300 hover:text-cyan-300'
+              }`}
+              title="Configure Alignment Mark Layer Option & Global Substrate Fiducials"
+            >
+              <Crosshair className="w-3 h-3 text-cyan-400 shrink-0" />
+              <span>Align</span>
+              {alignmentMarks.length > 0 && (
+                <span className="text-[10px] font-mono text-cyan-300">
+                  ({alignmentMarks.length})
+                </span>
+              )}
+            </button>
+          )}
+
           {onOpenMaskLevels && (
             <button
               type="button"
@@ -1422,13 +1711,39 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
             </button>
           )}
 
+          {onTogglePin && (
+            <button
+              type="button"
+              onClick={onTogglePin}
+              aria-pressed={isPinned}
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10.5px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                isPinned
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-200'
+                  : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-400 hover:text-slate-200'
+              }`}
+              title={
+                isPinned
+                  ? 'Pinned open across steps (click to auto-hide when leaving step)'
+                  : 'Pin open so Mask Track stays visible when switching steps'
+              }
+            >
+              <Pin className="w-3 h-3" />
+              <span className="hidden md:inline">{isPinned ? 'Pinned' : 'Pin'}</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleToggleMinimize}
             className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors"
-            title="Minimize Photomask Track to maximize cross-section view"
+            title="Collapse Photomask Track"
+            aria-label="Collapse Photomask Track"
           >
-            <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+            {overlayExpand || dockPosition === 'top' ? (
+              <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+            ) : (
+              <X className="w-3.5 h-3.5 text-slate-400" />
+            )}
           </button>
         </div>
       </div>
@@ -1462,7 +1777,11 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
             className="text-slate-400 truncate max-w-[75%]"
             title={`Drag or ←/→ (${formatNudgeLabel(arrowFineNm)}, Shift ${formatNudgeLabel(arrowCoarseNm)}) to move · Shift/Ctrl+Click or drag track for multi · Borders resize`}
           >
-            {dragState ? (
+            {draggingMark && markDragPreview ? (
+              <span className="text-cyan-300 font-semibold">
+                Moving {alignmentMarks.find((m) => m.id === draggingMark.id)?.label || 'Mark'}: {(markDragPreview.xNm / 1000).toFixed(2)} µm
+              </span>
+            ) : dragState ? (
               <span className="text-amber-300 font-semibold animate-pulse">
                 {dragState.type === 'move'
                   ? (dragState.initialWindows?.length || 1) > 1
@@ -1548,9 +1867,13 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
             const blockClasses = isLightField
               ? isActive || isDraggingThis
                 ? 'bg-slate-900 border-y-2 border-amber-400 shadow-xl'
+                : win.isAlignKey
+                ? 'bg-slate-900/95 border-y-2 border-cyan-400 hover:bg-slate-800 shadow-md'
                 : 'bg-slate-900/95 border-y border-slate-300/80 hover:bg-slate-800 shadow-md'
               : isActive || isDraggingThis
               ? 'bg-amber-400/40 border-y border-amber-400 shadow-xl'
+              : win.isAlignKey
+              ? 'bg-cyan-500/30 border-y border-cyan-400 hover:bg-cyan-500/40'
               : 'bg-emerald-400/25 border-y border-emerald-400/80 hover:bg-emerald-400/35';
 
             const handleClasses = isLightField
@@ -1599,15 +1922,18 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
                   }
                 >
                   <div className="flex items-center gap-1 text-[10.5px] font-mono font-bold text-white drop-shadow truncate select-none pointer-events-none">
+                    {win.isAlignKey && (
+                      <Crosshair className="w-2.5 h-2.5 text-cyan-300 flex-shrink-0" />
+                    )}
                     {win.fixedWidth ? (
                       <Lock className="w-2.5 h-2.5 text-amber-300 flex-shrink-0" />
-                    ) : (
+                    ) : !win.isAlignKey ? (
                       <MoveHorizontal
                         className={`w-2.5 h-2.5 flex-shrink-0 ${
                           isLightField ? 'text-slate-300' : 'text-amber-300'
                         }`}
                       />
-                    )}
+                    ) : null}
                     <span>{((win.xEnd - win.xStart) / 1000).toFixed(2)} µm</span>
                   </div>
                 </div>
@@ -1625,8 +1951,213 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
               </div>
             );
           })}
+
+          {/* Global Substrate Alignment Mark Fiducials on Track */}
+          {alignmentMarks.map((mark) => {
+            const xNm =
+              markDragPreview && markDragPreview.id === mark.id
+                ? markDragPreview.xNm
+                : mark.xNm;
+            const leftPct = Math.max(0, Math.min(100, (xNm / waferWidth) * 100));
+            const color = mark.color || '#22d3ee';
+            const isFromThisStep = mark.definedByStepId === step.id;
+
+            return (
+              <div
+                key={mark.id}
+                onPointerDown={(e) => handleMarkPointerDown(e, mark)}
+                onClick={(e) => e.stopPropagation()}
+                className="absolute top-0 bottom-0 -translate-x-1/2 w-3 cursor-ew-resize z-30 flex flex-col items-center justify-between group/am"
+                style={{ left: `${leftPct}%` }}
+                title={`${mark.label} (${(xNm / 1000).toFixed(2)} µm · ${
+                  mark.side === 'back' ? 'Backside' : mark.side === 'both' ? 'Both sides' : 'Frontside'
+                })${isFromThisStep ? ' · Defined by this step' : ''} — drag to move`}
+              >
+                <div
+                  className="w-2 h-1.5 rotate-45 -mt-0.5 border"
+                  style={{ backgroundColor: color, borderColor: '#020617' }}
+                />
+                <div
+                  className="flex-1 w-0 border-l border-dashed"
+                  style={{ borderColor: color, opacity: isFromThisStep ? 0.9 : 0.65 }}
+                />
+                <span
+                  className="px-1 py-0 text-[8.5px] font-mono font-bold rounded-xs leading-tight border bg-slate-950/95 pointer-events-none whitespace-nowrap"
+                  style={{ color, borderColor: color }}
+                >
+                  {mark.label}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
+
+      {/* Alignment Marks Drawer */}
+      {showAlignPanel && onUpdateAlignmentMarks && (
+        <div className="mt-1.5 mb-1 rounded-lg bg-slate-950/85 border border-cyan-500/30 p-2 space-y-2 text-[11px]">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-slate-800/80">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleDefinesAlignmentMarks}
+                aria-pressed={Boolean(litho.definesAlignmentMarks)}
+                className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  litho.definesAlignmentMarks
+                    ? 'bg-cyan-500/20 border-cyan-500/60 text-cyan-200'
+                    : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300'
+                }`}
+                title="Mark this photolithography step as patterning substrate alignment marks"
+              >
+                <Crosshair className="w-3 h-3 text-cyan-400 shrink-0" />
+                <span>Defines Alignment Marks</span>
+                <span
+                  className={`px-1 py-0 rounded-xs text-[9.5px] font-mono ${
+                    litho.definesAlignmentMarks
+                      ? 'bg-cyan-500/30 text-cyan-100'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {litho.definesAlignmentMarks ? 'ON' : 'OFF'}
+                </span>
+              </button>
+              <span className="text-[10px] text-slate-400">
+                Flags this step as patterning alignment fiducials on the wafer.
+              </span>
+            </div>
+
+            {windows.length > 0 && (() => {
+              const selCount = selectedWindowIds.length;
+              const alignKeyCount = windows.filter((w) => w.isAlignKey).length;
+              const deriveLabel =
+                selCount > 1
+                  ? `Derive Center Mark (${selCount} sel)`
+                  : selCount === 1
+                  ? 'Derive Mark (1 sel)'
+                  : alignKeyCount > 0
+                  ? `Derive from Align Keys (${alignKeyCount})`
+                  : 'Derive Marks from Windows';
+              const deriveTitle =
+                selCount > 1
+                  ? `Place a single global alignment mark centered within the ${selCount} selected shapes`
+                  : selCount === 1
+                  ? 'Place a global alignment mark centered on the selected shape'
+                  : alignKeyCount > 0
+                  ? `Place global substrate marks at the center of the ${alignKeyCount} align key shape(s)`
+                  : `Place global substrate marks at the center of this mask's ${windows.length} ${featureNoun}${windows.length === 1 ? '' : 's'}`;
+
+              return (
+                <button
+                  type="button"
+                  onClick={() => handleSyncMarksFromWindows()}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 hover:bg-cyan-950/60 border border-slate-700 hover:border-cyan-500/50 text-cyan-300 text-[10.5px] font-medium transition-colors whitespace-nowrap shrink-0"
+                  title={deriveTitle}
+                >
+                  <Crosshair className="w-3 h-3 shrink-0" />
+                  <span>{deriveLabel}</span>
+                </button>
+              );
+            })()}
+          </div>
+
+          {/* Global Substrate Marks List */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10.5px] font-semibold uppercase tracking-wider text-slate-400">
+                Global Substrate Alignment Marks ({alignmentMarks.length})
+              </span>
+              <button
+                type="button"
+                onClick={handleAddAlignmentMark}
+                className="flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-600/20 hover:bg-cyan-600/35 border border-cyan-500/50 text-cyan-200 text-[10.5px] font-medium transition-colors whitespace-nowrap shrink-0"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Add Substrate Mark</span>
+              </button>
+            </div>
+
+            {alignmentMarks.length === 0 ? (
+              <div className="px-2 py-1.5 rounded bg-slate-900/60 border border-slate-800/80 text-[10.5px] text-slate-400">
+                No global alignment marks defined on the substrate yet. Add a mark or derive them from this mask&apos;s windows to anchor fiducials across all process steps.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-28 overflow-y-auto pr-0.5">
+                {alignmentMarks.map((mark) => {
+                  const isFromThisStep = mark.definedByStepId === step.id;
+                  const sideLabel =
+                    mark.side === 'back' ? 'Back' : mark.side === 'both' ? 'Both' : 'Front';
+                  const nextSide: ProcessSide =
+                    mark.side === 'front' || !mark.side
+                      ? 'back'
+                      : mark.side === 'back'
+                      ? 'both'
+                      : 'front';
+
+                  return (
+                    <div
+                      key={mark.id}
+                      className={`flex items-center justify-between gap-1.5 px-2 py-1 rounded border text-[10.5px] ${
+                        isFromThisStep
+                          ? 'bg-cyan-950/35 border-cyan-500/50'
+                          : 'bg-slate-900/70 border-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span
+                          className="w-2 h-2 rounded-xs shrink-0"
+                          style={{ backgroundColor: mark.color || '#22d3ee' }}
+                        />
+                        <input
+                          type="text"
+                          value={mark.label}
+                          onChange={(e) =>
+                            handleUpdateAlignmentMark(mark.id, { label: e.target.value })
+                          }
+                          className="w-16 px-1 py-0.5 rounded bg-slate-950 border border-slate-700/80 text-slate-100 font-mono text-[10.5px] focus:outline-none focus:border-cyan-500"
+                          title="Alignment mark label"
+                        />
+                        <UmNumberInput
+                          valueNm={mark.xNm}
+                          minNm={0}
+                          maxNm={waferWidth}
+                          stepUm="0.05"
+                          onCommitNm={(valNm) =>
+                            handleUpdateAlignmentMark(mark.id, { xNm: valNm })
+                          }
+                          title="Global X coordinate on substrate (µm)"
+                          className="w-14 px-1 py-0.5 rounded bg-slate-950 border border-slate-700/80 text-slate-100 font-mono text-[10.5px] text-right focus:outline-none focus:border-cyan-500"
+                        />
+                        <span className="text-slate-500 font-mono text-[10px]">µm</span>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleUpdateAlignmentMark(mark.id, { side: nextSide })
+                          }
+                          className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9.5px] font-mono text-slate-300"
+                          title="Cycle substrate face for this alignment mark (Front / Back / Both)"
+                        >
+                          {sideLabel}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAlignmentMark(mark.id)}
+                          className="p-0.5 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                          title="Delete global alignment mark"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Numerical Apertures List & Controls */}
       {windows.length > 0 && (() => {
@@ -1747,6 +2278,40 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
                       : 'Dup'}
                   </span>
                 </button>
+                {onUpdateAlignmentMarks && effectiveSelectedIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleSyncMarksFromWindows(effectiveSelectedIds)}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-cyan-950/60 hover:bg-cyan-900/60 text-cyan-200 border border-cyan-500/40 text-[10px] font-medium transition-colors whitespace-nowrap shrink-0"
+                    title={
+                      effectiveSelectedIds.length > 1
+                        ? `Place 1 alignment mark centered across the ${effectiveSelectedIds.length} selected shapes`
+                        : 'Place 1 alignment mark centered on the selected shape'
+                    }
+                  >
+                    <Crosshair className="w-2.5 h-2.5 text-cyan-400" />
+                    <span>
+                      {effectiveSelectedIds.length > 1 ? 'Center Mark' : 'Mark'}
+                    </span>
+                  </button>
+                )}
+                {effectiveSelectedIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSelectedAlignKeys(effectiveSelectedIds)}
+                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                      windows
+                        .filter((w) => effectiveSelectedIds.includes(w.id))
+                        .every((w) => Boolean(w.isAlignKey))
+                        ? 'bg-cyan-500/20 border-cyan-500/60 text-cyan-200'
+                        : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300 hover:text-cyan-300'
+                    }`}
+                    title="Toggle Align Key flag on selected shapes"
+                  >
+                    <Crosshair className="w-2.5 h-2.5 text-cyan-400" />
+                    <span>Key</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={!singleSelectedWin}
@@ -1963,6 +2528,25 @@ export const MaskEditor: React.FC<MaskEditorProps> = ({
                         </div>
 
                         <div className="flex items-center gap-0.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleWindowAlignKey(win.id);
+                            }}
+                            className={`p-0.5 rounded transition-colors ${
+                              win.isAlignKey
+                                ? 'text-cyan-300 bg-cyan-500/20'
+                                : 'text-slate-500 hover:text-cyan-300 hover:bg-cyan-500/10'
+                            }`}
+                            title={
+                              win.isAlignKey
+                                ? `Unmark ${featureNoun} #${idx + 1} as an Align Key shape`
+                                : `Mark ${featureNoun} #${idx + 1} as an Align Key shape`
+                            }
+                          >
+                            <Crosshair className="w-3 h-3" />
+                          </button>
                           <button
                             type="button"
                             onClick={(e) => {

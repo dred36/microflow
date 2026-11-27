@@ -246,38 +246,38 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
   return (
     <div className="flex flex-col h-full min-w-0 bg-slate-900 text-slate-200">
       {/* Editor Header */}
-      <div className="p-4 border-b border-slate-800">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-              Starting Wafer Substrate
+      <div className="px-2.5 py-2 border-b border-slate-800 shrink-0">
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[9.5px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shrink-0">
+              Substrate
             </span>
-            <span className="text-xs text-slate-400 font-mono">
+            <span className="text-[10.5px] text-slate-400 font-mono tabular-nums shrink-0">
               {layers.length} {layers.length === 1 ? 'Layer' : 'Layers'}
             </span>
           </div>
 
-          <div className="text-xs font-mono text-sky-400 font-semibold">
+          <div className="text-[11px] font-mono text-sky-400 font-semibold tabular-nums shrink-0">
             {formatThickness(totalThickness, thicknessUnit)} total
           </div>
         </div>
 
-        <h2 className="text-sm font-bold text-white tracking-wide">
+        <h2 className="text-xs font-bold text-white tracking-wide leading-tight truncate">
           Multi-Layer Substrate Architecture
         </h2>
-        <p className="text-[11px] text-slate-400 mt-0.5">
-          Define the base wafer stack (e.g. bulk handle, buried oxide, SOI device layer) prior to Step 1.
+        <p className="text-[10px] text-slate-400 leading-tight mt-0.5 truncate" title="Define the base wafer stack (e.g. bulk handle, buried oxide, SOI device layer) prior to Step 1.">
+          Base wafer stack prior to Step 1.
         </p>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-2.5 space-y-2.5">
         {/* Process Flow Description */}
-        <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5">
-          <div className="flex items-center justify-between text-xs">
+        <div className="p-2 rounded-lg bg-slate-950/70 border border-slate-800 space-y-1">
+          <div className="flex items-center justify-between text-[11px]">
             <label htmlFor="flow-description-input" className="font-semibold text-slate-300">
-              Process Flow Description
+              Flow Description
             </label>
-            <span className="text-[10px] text-slate-500">Shown on Import &amp; SOP</span>
+            <span className="text-[9.5px] text-slate-500">Shown on Import &amp; SOP</span>
           </div>
           <textarea
             id="flow-description-input"
@@ -289,17 +289,17 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
                 description: e.target.value,
               })
             }
-            placeholder="Describe what this flow fabricates, key targets, or notes for reuse when importing..."
-            className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 text-xs leading-relaxed focus:outline-none focus:border-sky-500 resize-y"
+            placeholder="Describe what this flow fabricates, key targets, or notes..."
+            className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 text-[11px] leading-snug focus:outline-none focus:border-sky-500 resize-y"
           />
         </div>
 
         {/* Wafer Width Setting */}
-        <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-xs">
+        <div className="p-2 rounded-lg bg-slate-950/70 border border-slate-800 space-y-1.5">
+          <div className="flex items-center justify-between text-[11px]">
             <span className="font-semibold text-slate-300">Wafer Slice Width</span>
             <div className="flex items-center gap-1.5">
-              <span className="font-mono text-sky-400 font-semibold">
+              <span className="font-mono text-sky-400 font-semibold tabular-nums">
                 {(flow.substrateWidth / 1000).toFixed(1)} µm
               </span>
               <ParamBindingBadge
@@ -315,7 +315,7 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
             <button
               type="button"
               onClick={() => setWaferBindOpen((v) => !v)}
-              className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-violet-950/35 border border-violet-500/50 text-xs font-mono text-violet-200 hover:border-violet-400"
+              className="w-full flex items-center justify-between px-2 py-1 rounded-md bg-violet-950/35 border border-violet-500/50 text-[11px] font-mono text-violet-200 hover:border-violet-400"
             >
               <span>{(flow.substrateWidth / 1000).toFixed(2)} µm</span>
               <span className="text-[10px] text-violet-300 truncate">
@@ -323,8 +323,8 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
               </span>
             </button>
           ) : (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5">
                 <input
                   type="number"
                   min="1"
@@ -364,19 +364,19 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
                       (e.target as HTMLInputElement).blur();
                     }
                   }}
-                  className="w-24 px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                  className="w-20 px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                 />
-                <span className="text-xs text-slate-400">µm</span>
+                <span className="text-[11px] text-slate-400">µm</span>
               </div>
 
               {/* Quick presets */}
-              <div className="flex flex-wrap items-center gap-1">
+              <div className="grid grid-cols-6 gap-1">
                 {[5, 10, 20, 50, 100, 500].map((w) => (
                   <button
                     key={w}
                     type="button"
                     onClick={() => handleWidthChange(w)}
-                    className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${
+                    className={`py-0.5 rounded text-[10px] font-mono tabular-nums transition-colors ${
                       flow.substrateWidth === w * 1000
                         ? 'bg-sky-600 text-white'
                         : 'bg-slate-800 text-slate-400 hover:text-slate-200'
@@ -440,38 +440,38 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
         </div>
 
         {/* Visual Layer Stack Bar Preview */}
-        <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block">
-            Substrate Cross-Section Preview (Top to Bottom)
+        <div className="p-2 rounded-lg bg-slate-950/70 border border-slate-800 space-y-1.5">
+          <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide block">
+            Stack Preview (Top → Bottom)
           </span>
 
-          <div className="flex flex-col-reverse rounded-lg overflow-hidden border border-slate-700 shadow-inner bg-slate-900">
+          <div className="flex flex-col-reverse rounded-md overflow-hidden border border-slate-700 shadow-inner bg-slate-900">
             {layers.map((layer, idx) => {
               const mat = getMaterialById(flow.materials, layer.materialId);
-              const heightPct = Math.max(16, (layer.thickness / totalThickness) * 120);
+              const heightPct = Math.max(14, (layer.thickness / totalThickness) * 82);
 
               return (
                 <div
                   key={layer.id}
                   style={{
                     backgroundColor: mat.color,
-                    minHeight: '26px',
+                    minHeight: '20px',
                     height: `${heightPct}px`,
                   }}
-                  className="relative w-full border-b border-black/20 flex items-center justify-between px-3 text-[11px] font-medium text-slate-900 select-none shadow-sm transition-all"
+                  className="relative w-full border-b border-black/20 flex items-center justify-between px-2 text-[10.5px] font-medium text-slate-900 select-none transition-all"
                 >
-                  <div className="flex items-center gap-2 truncate">
-                    <span className="w-4 h-4 rounded-full bg-black/20 flex items-center justify-center font-mono text-[9px] text-white font-bold">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span className="w-3.5 h-3.5 rounded bg-black/25 flex items-center justify-center font-mono text-[9px] text-white font-bold shrink-0">
                       {idx + 1}
                     </span>
-                    <span className="truncate font-bold drop-shadow-sm text-slate-950">
+                    <span className="truncate font-bold text-slate-950">
                       {layer.name || mat.name}
                     </span>
-                    <span className="text-[10px] font-mono opacity-80 drop-shadow-sm text-slate-900">
+                    <span className="text-[9.5px] font-mono opacity-80 text-slate-900 shrink-0">
                       ({mat.formula})
                     </span>
                   </div>
-                  <span className="font-mono text-[10px] font-bold text-slate-950 ml-2 whitespace-nowrap">
+                  <span className="font-mono text-[9.5px] font-bold text-slate-950 ml-1.5 whitespace-nowrap tabular-nums">
                     {formatThickness(layer.thickness, thicknessUnit)}
                   </span>
                 </div>
@@ -481,16 +481,16 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
         </div>
 
         {/* Multi-Layer Stack List (From Top to Bottom) */}
-        <div className="space-y-2.5">
+        <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-300">
+            <span className="text-[11px] font-semibold text-slate-300">
               Layer Stack Definition
             </span>
             <button
               onClick={handleAddLayer}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-sm transition-colors"
+              className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-semibold shadow-sm transition-colors"
             >
-              <Plus className="w-3.5 h-3.5" />
+              <Plus className="w-3 h-3" />
               <span>Add Layer</span>
             </button>
           </div>
@@ -505,79 +505,77 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
             return (
               <div
                 key={layer.id}
-                className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5 transition-all hover:border-slate-700"
+                className="p-2 rounded-lg bg-slate-950/80 border border-slate-800 space-y-1.5 transition-all hover:border-slate-700"
               >
                 {/* Layer Card Header */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-1">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <span
-                      className="w-3 h-3 rounded-full border border-white/20"
+                      className="w-2.5 h-2.5 rounded-xs border border-white/20 shrink-0"
                       style={{ backgroundColor: mat.color }}
                     />
-                    <span className="text-xs font-bold text-white">
-                      Layer #{actualIdx + 1}
+                    <span className="text-[11px] font-bold text-white shrink-0">
+                      #{actualIdx + 1}
                     </span>
-                    <span className="text-[10px] font-mono text-slate-400">
-                      {isTop ? '(Top Surface)' : isBottom ? '(Bottom Bulk Handle)' : ''}
+                    <span className="text-[9.5px] font-mono text-slate-400 truncate">
+                      {isTop ? 'Top Surface' : isBottom ? 'Bulk Handle' : ''}
                     </span>
                   </div>
 
                   {/* Move Up/Down & Delete */}
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-0.5 shrink-0">
                     <button
                       disabled={isTop}
                       onClick={() => handleMoveLayer(actualIdx, 'up')}
-                      className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-20 hover:bg-slate-800 transition-colors"
+                      className="p-0.5 rounded text-slate-400 hover:text-white disabled:opacity-20 hover:bg-slate-800 transition-colors"
                       title="Move toward top surface"
                     >
-                      <ArrowUp className="w-3.5 h-3.5" />
+                      <ArrowUp className="w-3 h-3" />
                     </button>
                     <button
                       disabled={isBottom}
                       onClick={() => handleMoveLayer(actualIdx, 'down')}
-                      className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-20 hover:bg-slate-800 transition-colors"
+                      className="p-0.5 rounded text-slate-400 hover:text-white disabled:opacity-20 hover:bg-slate-800 transition-colors"
                       title="Move toward bulk substrate"
                     >
-                      <ArrowDown className="w-3.5 h-3.5" />
+                      <ArrowDown className="w-3 h-3" />
                     </button>
                     <button
                       onClick={() => handleDuplicateLayer(actualIdx)}
-                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                      className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
                       title="Duplicate layer"
                     >
-                      <Copy className="w-3.5 h-3.5" />
+                      <Copy className="w-3 h-3" />
                     </button>
                     <button
                       disabled={layers.length <= 1}
                       onClick={() => handleDeleteLayer(actualIdx)}
-                      className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 disabled:opacity-20 transition-colors"
+                      className="p-0.5 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 disabled:opacity-20 transition-colors"
                       title="Delete layer"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
                 </div>
 
                 {/* Layer Name Input */}
                 <div>
-                  <label className="block text-[10px] text-slate-400 mb-0.5">
-                    Layer Name / Role
-                  </label>
                   <input
                     type="text"
                     value={layer.name || ''}
                     onChange={(e) =>
                       handleUpdateLayer(actualIdx, { name: e.target.value })
                     }
-                    placeholder="e.g. Bulk Silicon Handle, Buried Oxide (BOX)..."
-                    className="w-full px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-sky-500"
+                    aria-label={`Layer ${actualIdx + 1} name or role`}
+                    placeholder="Layer name / role..."
+                    className="w-full px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-slate-100 text-[11px] focus:outline-none focus:border-sky-500"
                   />
                 </div>
 
                 {/* Material & Thickness in Grid */}
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-1.5">
                   <div>
-                    <label className="block text-[10px] text-slate-400 mb-0.5">
+                    <label className="block text-[9.5px] text-slate-400 mb-0.5">
                       Material
                     </label>
                     <select
@@ -585,7 +583,7 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
                       onChange={(e) =>
                         handleUpdateLayer(actualIdx, { materialId: e.target.value })
                       }
-                      className="w-full px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-1.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-200 text-[11px] focus:outline-none focus:border-sky-500"
                     >
                       {flow.materials.map((m) => (
                         <option key={m.id} value={m.id}>
@@ -596,9 +594,9 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
                   </div>
 
                   <div>
-                    <div className="flex justify-between text-[10px] text-slate-400 mb-0.5">
-                      <span>Thickness ({getUnitLabel(thicknessUnit)})</span>
-                      <span className="font-mono text-sky-400">
+                    <div className="flex justify-between text-[9.5px] text-slate-400 mb-0.5">
+                      <span>Thick. ({getUnitLabel(thicknessUnit)})</span>
+                      <span className="font-mono text-sky-400 tabular-nums">
                         {formatThickness(layer.thickness, thicknessUnit === 'nm' ? 'um' : 'nm')}
                       </span>
                     </div>
@@ -612,7 +610,7 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
                       unit={thicknessUnit}
                       minNm={5}
                       stepNm={50}
-                      className="w-full px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
+                      className="w-full px-2 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] tabular-nums focus:outline-none focus:border-sky-500"
                       expression={layer.paramBindings?.thickness}
                       variables={variables}
                       waferWidth={flow.substrateWidth}
@@ -662,31 +660,31 @@ export const SubstrateEditor: React.FC<SubstrateEditorProps> = ({
         </div>
 
         {/* Substrate Templates / Presets Quick Loader */}
-        <div className="pt-3 border-t border-slate-800 space-y-2">
+        <div className="pt-2 border-t border-slate-800 space-y-1.5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-300">
+            <span className="text-[11px] font-semibold text-slate-300">
               Standard Substrate Presets
             </span>
-            <span className="text-[10px] text-slate-500 font-mono">1-Click Apply</span>
+            <span className="text-[9.5px] text-slate-500 font-mono">1-Click Apply</span>
           </div>
 
-          <div className="grid grid-cols-1 gap-1.5">
+          <div className="grid grid-cols-1 gap-1">
             {SUBSTRATE_PRESETS.map((p) => (
               <button
                 key={p.name}
                 onClick={() => handleLoadPreset(p)}
-                className="flex items-start justify-between p-2 rounded-lg bg-slate-950/60 border border-slate-800 hover:border-sky-500/60 hover:bg-slate-800/40 text-left transition-all"
+                className="flex items-start justify-between px-2 py-1.5 rounded-md bg-slate-950/60 border border-slate-800 hover:border-sky-500/60 hover:bg-slate-800/40 text-left transition-all"
               >
-                <div>
-                  <div className="text-xs font-semibold text-slate-200">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold text-slate-200 leading-tight truncate">
                     {p.name}
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">
+                  <div className="text-[9.5px] text-slate-400 leading-tight mt-0.5 line-clamp-1">
                     {p.description}
                   </div>
                 </div>
-                <span className="text-[10px] font-mono text-sky-400 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-700 flex-shrink-0 ml-2">
-                  {p.layers.length} {p.layers.length === 1 ? 'layer' : 'layers'}
+                <span className="text-[9.5px] font-mono text-sky-400 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-700 shrink-0 ml-2 tabular-nums">
+                  {p.layers.length}L
                 </span>
               </button>
             ))}

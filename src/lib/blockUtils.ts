@@ -223,16 +223,22 @@ export function rebuildFlowFromTimelineItems(
 export function createBlock(
   flow: ProcessFlow,
   name?: string,
-  color?: string
+  color?: string,
+  description?: string
 ): { flow: ProcessFlow; block: ProcessBlock } {
   const currentBlocks = flow.blocks ? [...flow.blocks] : [];
   const blockNum = currentBlocks.length + 1;
   const blockId = `block_${Date.now()}`;
 
+  const resolvedDescription =
+    description !== undefined
+      ? description.trim() || undefined
+      : 'Process operations regrouped into a fabrication module';
+
   const newBlock: ProcessBlock = {
     id: blockId,
     name: name || `Module ${blockNum}: Fabrication Block`,
-    description: 'Process operations regrouped into a fabrication module',
+    description: resolvedDescription,
     color: color || BLOCK_PALETTE[(blockNum - 1) % BLOCK_PALETTE.length],
     collapsed: false,
     placeholderStepIndex: flow.steps.length,
